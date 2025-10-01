@@ -91,3 +91,8 @@ async def ask(payload: dict):
     except Exception as e:
         logger.error(f"Query processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
