@@ -262,4 +262,4 @@ For support and questions:
 
 ---
 
-**Built with ❤️ for mental health awareness and support**
+**Built with ❤️ for mental health awareness and support, Do drop a STAR if you liked it.**
