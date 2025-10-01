@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multimodal Depression RAG</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="background">
+        <div class="gradient-orb gradient-orb-1"></div>
+        <div class="gradient-orb gradient-orb-2"></div>
+        <div class="gradient-orb gradient-orb-3"></div>
+    </div>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="glass-card header">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-brain"></i>
+                    <h1>Depression RAG Assistant</h1>
+                </div>
+                <div class="status-indicator">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Connecting...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- File Upload Section -->
+            <section class="glass-card upload-section">
+                <h2><i class="fas fa-upload"></i> Upload Documents</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-content">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p>Drag & drop files here or click to browse</p>
+                        <small>Supports PDF, images, and text files</small>
+                    </div>
+                    <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.txt,.doc,.docx">
+                </div>
+                <div class="uploaded-files" id="uploadedFiles"></div>
+            </section>
+
+            <!-- Chat Interface -->
+            <section class="glass-card chat-section">
+                <h2><i class="fas fa-comments"></i> Ask Questions</h2>
+                <div class="chat-container">
+                    <div class="messages" id="messages">
+                        <div class="message welcome">
+                            <div class="message-content">
+                                <i class="fas fa-robot"></i>
+                                <p>Hello! I'm your depression research assistant. Upload some documents and ask me questions about depression, mental health, or any related topics.</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="input-container">
+                        <div class="input-wrapper">
+                            <textarea 
+                                id="messageInput" 
+                                placeholder="Ask me anything about depression or mental health..."
+                                rows="1"
+                            ></textarea>
+                            <button id="sendButton" class="send-button">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                        <div class="input-footer">
+                            <span class="char-count" id="charCount">0/500</span>
+                            <button id="resetButton" class="reset-button">
+                                <i class="fas fa-refresh"></i> Reset
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Processing your request...</p>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
