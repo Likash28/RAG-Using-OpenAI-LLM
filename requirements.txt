@@ -23,10 +23,9 @@ chromadb>=0.4.0
 sentence-transformers>=2.2.0
 torch>=2.0.0
 
-# Evaluation and ML
+# ML dependencies
 pandas>=2.0.0
 scikit-learn>=1.3.0
-datasets>=2.14.0
 
 # LangChain (compatible versions)
 langchain>=0.1.0

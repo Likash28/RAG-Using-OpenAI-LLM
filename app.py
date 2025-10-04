@@ -13,15 +13,20 @@ from logging_config import setup_logging, get_logger
 setup_logging()
 logger = get_logger("RAGApplication")
 
-app = FastAPI(title="Multimodal Depression RAG")
+app = FastAPI(
+    title="Multimodal Depression RAG",
+    description="A specialized RAG system for depression and mental health information",
+    version="1.0.0"
+)
 
-# Add CORS middleware
+# CORS middleware - Updated for production deployment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],  # Add your frontend domains in production
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 # Note: LoggingMiddleware removed for now to avoid import complexity
@@ -38,19 +43,20 @@ async def root():
     logger.info("Serving main page")
     return FileResponse("static/index.html")
 
-@app.get("/health")
-async def health():
+# Health check endpoint
+@app.get("/api/health")
+async def health_check():
     logger.info("Health check requested")
-    return {"status": "ok"}
+    return {"ok": True}
 
-@app.post("/reset")
+@app.post("/api/reset")
 async def reset():
     logger.info("Resetting RAG pipeline")
     pipe.reset()
     logger.info("RAG pipeline reset completed")
     return {"ok": True}
 
-@app.post("/ingest")
+@app.post("/api/ingest")
 async def ingest(files: List[UploadFile] = File(...)):
     logger.info(f"Starting file ingestion for {len(files)} files")
     saved = []
@@ -73,7 +79,7 @@ async def ingest(files: List[UploadFile] = File(...)):
     
     return {"ingested": [os.path.basename(x) for x in saved]}
 
-@app.post("/ask")
+@app.post("/api/ask")
 async def ask(payload: dict):
     q = payload.get("query")
     k = int(payload.get("k", settings.top_k))
