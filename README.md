@@ -226,10 +226,6 @@ curl -X POST "http://localhost:8000/ask" \
   -d '{"query": "What are the symptoms of depression?", "k": 3}'
 ```
 
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## 🤝 Contributing
 
 1. Fork the repository
