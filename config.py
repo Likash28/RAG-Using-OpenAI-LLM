@@ -1,5 +1,9 @@
 from dataclasses import dataclass
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 @dataclass
 class Settings:
@@ -10,7 +14,7 @@ class Settings:
 
     # Embeddings
     text_model_name: str = os.getenv("TEXT_EMBEDDER", "sentence-transformers/all-MiniLM-L6-v2")
-    clip_model_name: str = os.getenv("CLIP_EMBEDDER", "openai/clip-vit-base-patch32")
+    clip_model_name: str = os.getenv("CLIP_EMBEDDER", "clip-ViT-B-32")
 
     # Stores
     chroma_dir: str = os.getenv("CHROMA_DIR", "./chroma_db")

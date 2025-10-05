@@ -5,6 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import shutil
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 # from pipeline import RAGPipeline  # Defer import to avoid startup issues
 from config import settings
 from logging_config import setup_logging, get_logger
