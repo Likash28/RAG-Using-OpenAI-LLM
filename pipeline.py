@@ -22,6 +22,8 @@ class Stores:
 
 class RAGPipeline:
     def __init__(self):
+        from config import validate_settings
+        validate_settings()  # Validate settings before initializing
         logger.info("Initializing RAG Pipeline components")
         self.text_embedder = TextEmbedder(settings.text_model_name)
         logger.info("Text embedder initialized")

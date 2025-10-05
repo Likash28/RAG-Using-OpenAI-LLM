@@ -45,6 +45,13 @@ def get_pipeline():
             logger.info("Initializing RAG Pipeline")
             pipe = RAGPipeline()
             logger.info("RAG Pipeline initialized successfully")
+        except ValueError as e:
+            if "GEMINI_API_KEY" in str(e):
+                logger.error("Missing GEMINI_API_KEY environment variable")
+                raise HTTPException(status_code=500, detail="API key not configured. Please set GEMINI_API_KEY environment variable.")
+            else:
+                logger.error(f"Configuration error: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Configuration error: {str(e)}")
         except Exception as e:
             logger.error(f"Failed to initialize RAG Pipeline: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Pipeline initialization failed: {str(e)}")
@@ -69,6 +76,24 @@ async def health_check():
 @app.get("/api/test")
 async def test():
     return {"message": "API is working!", "endpoints": ["/", "/api/health", "/api/test", "/api/ask", "/api/ingest", "/api/reset"]}
+
+# Startup check endpoint
+@app.get("/api/startup")
+async def startup_check():
+    try:
+        # Test if we can import the pipeline (without initializing)
+        from pipeline import RAGPipeline
+        return {
+            "status": "ready",
+            "message": "All modules can be imported successfully",
+            "pipeline_available": True
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Module import failed: {str(e)}",
+            "pipeline_available": False
+        }
 
 @app.post("/api/reset")
 async def reset():

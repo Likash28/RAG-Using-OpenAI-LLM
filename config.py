@@ -5,12 +5,12 @@ import os
 class Settings:
     provider: str = os.getenv("PROVIDER", "gemini")
     # Gemini
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "AIzaSyCeaDA9dKx9jARJJnsG2PyM71ajiNuGIj0")
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
 
     # Embeddings
     text_model_name: str = os.getenv("TEXT_EMBEDDER", "sentence-transformers/all-MiniLM-L6-v2")
-    clip_model_name: str = os.getenv("CLIP_EMBEDDER", "clip-ViT-B-32")
+    clip_model_name: str = os.getenv("CLIP_EMBEDDER", "openai/clip-vit-base-patch32")
 
     # Stores
     chroma_dir: str = os.getenv("CHROMA_DIR", "./chroma_db")
@@ -27,3 +27,8 @@ class Settings:
     log_dir: str = os.getenv("LOG_DIR", "logs")
 
 settings = Settings()
+
+# Validate required settings only when needed
+def validate_settings():
+    if not settings.gemini_api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is required")
