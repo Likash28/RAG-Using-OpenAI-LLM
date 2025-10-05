@@ -44,7 +44,7 @@ function setupEventListeners() {
 // Server Status Check
 async function checkServerStatus() {
     try {
-        const response = await fetch(`${API_BASE_URL}/health`);
+        const response = await fetch(`${API_BASE_URL}/api/health`);
         if (response.ok) {
             updateStatus('connected', 'Connected');
         } else {
@@ -95,7 +95,7 @@ async function processFiles(files) {
             formData.append('files', file);
         });
 
-        const response = await fetch(`${API_BASE_URL}/ingest`, {
+        const response = await fetch(`${API_BASE_URL}/api/ingest`, {
             method: 'POST',
             body: formData
         });
@@ -167,7 +167,7 @@ async function sendMessage() {
     showLoading();
 
     try {
-        const response = await fetch(`${API_BASE_URL}/ask`, {
+        const response = await fetch(`${API_BASE_URL}/api/ask`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -256,7 +256,7 @@ function resetConversation() {
     if (confirm('Are you sure you want to reset the conversation and clear all uploaded files?')) {
         showLoading();
         
-        fetch(`${API_BASE_URL}/reset`, { method: 'POST' })
+        fetch(`${API_BASE_URL}/api/reset`, { method: 'POST' })
             .then(response => {
                 if (response.ok) {
                     messages.innerHTML = `
