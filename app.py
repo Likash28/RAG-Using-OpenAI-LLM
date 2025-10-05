@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import shutil
 import os
-from pipeline import RAGPipeline
+# from pipeline import RAGPipeline  # Defer import to avoid startup issues
 from config import settings
 from logging_config import setup_logging, get_logger
 
@@ -34,14 +34,21 @@ app.add_middleware(
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Initialize RAG Pipeline (with error handling)
-try:
-    logger.info("Initializing RAG Pipeline")
-    pipe = RAGPipeline()
-    logger.info("RAG Pipeline initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize RAG Pipeline: {str(e)}")
-    pipe = None
+# Initialize RAG Pipeline lazily
+pipe = None
+
+def get_pipeline():
+    global pipe
+    if pipe is None:
+        try:
+            from pipeline import RAGPipeline
+            logger.info("Initializing RAG Pipeline")
+            pipe = RAGPipeline()
+            logger.info("RAG Pipeline initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize RAG Pipeline: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Pipeline initialization failed: {str(e)}")
+    return pipe
 
 @app.get("/")
 async def root():
@@ -60,17 +67,15 @@ async def health_check():
 
 @app.post("/api/reset")
 async def reset():
-    if pipe is None:
-        raise HTTPException(status_code=500, detail="RAG pipeline not initialized")
+    pipeline = get_pipeline()
     logger.info("Resetting RAG pipeline")
-    pipe.reset()
+    pipeline.reset()
     logger.info("RAG pipeline reset completed")
     return {"ok": True}
 
 @app.post("/api/ingest")
 async def ingest(files: List[UploadFile] = File(...)):
-    if pipe is None:
-        raise HTTPException(status_code=500, detail="RAG pipeline not initialized")
+    pipeline = get_pipeline()
     logger.info(f"Starting file ingestion for {len(files)} files")
     saved = []
     os.makedirs("uploads", exist_ok=True)
@@ -84,7 +89,7 @@ async def ingest(files: List[UploadFile] = File(...)):
     
     try:
         logger.info("Starting RAG pipeline ingestion")
-        pipe.ingest_paths(saved)
+        pipeline.ingest_paths(saved)
         logger.info(f"Successfully ingested {len(saved)} files")
     except Exception as e:
         logger.error(f"File ingestion failed: {str(e)}")
@@ -94,8 +99,7 @@ async def ingest(files: List[UploadFile] = File(...)):
 
 @app.post("/api/ask")
 async def ask(payload: dict):
-    if pipe is None:
-        raise HTTPException(status_code=500, detail="RAG pipeline not initialized")
+    pipeline = get_pipeline()
     q = payload.get("query")
     k = int(payload.get("k", settings.top_k))
     
@@ -106,7 +110,7 @@ async def ask(payload: dict):
     logger.info(f"Processing query: {q[:100]}{'...' if len(q) > 100 else ''}")
     
     try:
-        res = pipe.query(q, k)
+        res = pipeline.query(q, k)
         logger.info("Query processed successfully")
         return JSONResponse(res)
     except Exception as e:
