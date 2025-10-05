@@ -65,6 +65,11 @@ async def health_check():
         "status": "running"
     }
 
+# Simple test endpoint
+@app.get("/api/test")
+async def test():
+    return {"message": "API is working!", "endpoints": ["/", "/api/health", "/api/test", "/api/ask", "/api/ingest", "/api/reset"]}
+
 @app.post("/api/reset")
 async def reset():
     pipeline = get_pipeline()
