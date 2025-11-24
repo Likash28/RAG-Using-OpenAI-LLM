@@ -60,7 +60,11 @@ file_handler.setLevel(logging.DEBUG)
 
 # Console logging setup
 stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.ERROR)
+# Show INFO level and above in console for better visibility during development
+if settings.environment == "development":
+    stream_handler.setLevel(logging.INFO)
+else:
+    stream_handler.setLevel(logging.ERROR)
 root_logger.addHandler(stream_handler)
 
 # Custom Request Formatter

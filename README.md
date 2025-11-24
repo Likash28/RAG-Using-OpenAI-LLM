@@ -1,6 +1,6 @@
 # 🧠 Depression RAG Assistant
 
-A specialized Retrieval-Augmented Generation (RAG) system designed to provide accurate, evidence-based information about depression and mental health. Built with FastAPI, Gemini LLM, and a beautiful Glass UI interface.
+A specialized Retrieval-Augmented Generation (RAG) system designed to provide accurate, evidence-based information about depression and mental health. Built with FastAPI, OpenAI LLM, and a beautiful Glass UI interface.
 
 ## ✨ Features
 
@@ -38,7 +38,7 @@ A specialized Retrieval-Augmented Generation (RAG) system designed to provide ac
 
 ### Prerequisites
 - Python 3.8+
-- Gemini API key
+- OpenAI API key
 - Git
 
 ### Installation
@@ -63,7 +63,7 @@ A specialized Retrieval-Augmented Generation (RAG) system designed to provide ac
 4. **Configure environment**
    ```bash
    cp env.example .env
-   # Edit .env and add your Gemini API key
+   # Edit .env and add your OpenAI API key
    ```
 
 5. **Run the application**
@@ -80,11 +80,12 @@ A specialized Retrieval-Augmented Generation (RAG) system designed to provide ac
 
 ```
 ├── app.py                 # FastAPI application
-├── pipeline.py            # RAG pipeline with Gemini LLM
+├── pipeline.py            # RAG pipeline with OpenAI LLM
 ├── config.py              # Configuration management
-├── gemini_llm.py          # Gemini LLM wrapper
+├── openai_llm.py          # OpenAI LLM wrapper
 ├── vectorstore.py         # Vector database management
 ├── embedder.py            # Text and image embeddings
+├── extractors.py          # Document extraction and processing
 ├── logging_config.py      # Centralized logging
 ├── prompts/               # Prompt system
 │   ├── system_prompt.txt  # Depression-focused system prompt
@@ -93,7 +94,6 @@ A specialized Retrieval-Augmented Generation (RAG) system designed to provide ac
 │   ├── index.html         # Main interface
 │   ├── style.css          # Glass UI styling
 │   └── script.js          # Frontend logic
-├── utils/                 # Utility functions
 ├── requirements.txt       # Python dependencies
 ├── env.example           # Environment template
 └── .gitignore            # Git ignore rules
@@ -107,15 +107,15 @@ Create a `.env` file with the following variables:
 
 ```env
 # Provider
-PROVIDER=gemini
+PROVIDER=openai
 
-# Gemini Configuration
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.0-flash-exp
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o-mini
 
 # Embeddings
 TEXT_EMBEDDER=sentence-transformers/all-MiniLM-L6-v2
-CLIP_EMBEDDER=clip-ViT-B-32
+BLIP_EMBEDDER=Salesforce/blip-itm-base-coco
 
 # Database
 CHROMA_DIR=./chroma_db
@@ -124,6 +124,10 @@ SQLITE_PATH=./facts.db
 # RAG Settings
 TOP_K=5
 MAX_TOKENS=600
+
+# Audio Transcription
+OPENAI_WHISPER=local
+WHISPER_MODEL_SIZE=base
 
 # Logging
 ENVIRONMENT=development

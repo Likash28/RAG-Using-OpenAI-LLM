@@ -21,7 +21,7 @@
             <div class="header-content">
                 <div class="logo">
                     <i class="fas fa-brain"></i>
-                    <h1>Depression RAG Assistant</h1>
+                    <h1>MRAG-SAR Assistant</h1>
                 </div>
                 <div class="status-indicator">
                     <div class="status-dot" id="statusDot"></div>
@@ -39,9 +39,18 @@
                     <div class="upload-content">
                         <i class="fas fa-cloud-upload-alt"></i>
                         <p>Drag & drop files here or click to browse</p>
-                        <small>Supports PDF, images, and text files</small>
+                        <small>Supports: Audio (mp3, wav, m4a, flac, ogg), Images (png, jpg, jpeg, webp, bmp, tiff), Text (txt only)</small>
                     </div>
-                    <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.txt,.doc,.docx">
+                    <input type="file" id="fileInput" multiple accept=".mp3,.wav,.m4a,.flac,.ogg,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.txt">
+                </div>
+                <div class="selected-files" id="selectedFiles"></div>
+                <div class="upload-actions" id="uploadActions" style="display: none;">
+                    <button id="submitButton" class="submit-button">
+                        <i class="fas fa-upload"></i> Submit & Process Files
+                    </button>
+                    <button id="clearButton" class="clear-button">
+                        <i class="fas fa-times"></i> Clear All
+                    </button>
                 </div>
                 <div class="uploaded-files" id="uploadedFiles"></div>
             </section>

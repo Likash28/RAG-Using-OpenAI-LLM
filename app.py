@@ -51,9 +51,9 @@ def get_pipeline():
             pipe = RAGPipeline()
             logger.info("RAG Pipeline initialized successfully")
         except ValueError as e:
-            if "GEMINI_API_KEY" in str(e):
-                logger.error("Missing GEMINI_API_KEY environment variable")
-                raise HTTPException(status_code=500, detail="API key not configured. Please set GEMINI_API_KEY environment variable.")
+            if "API_KEY" in str(e) or "API key" in str(e):
+                logger.error(f"Missing API key: {str(e)}")
+                raise HTTPException(status_code=500, detail="API key not configured. Please set OPENAI_API_KEY environment variable.")
             else:
                 logger.error(f"Configuration error: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Configuration error: {str(e)}")
@@ -124,13 +124,51 @@ async def ingest(files: List[UploadFile] = File(...)):
     
     try:
         logger.info("Starting RAG pipeline ingestion")
-        pipeline.ingest_paths(saved)
+        result = pipeline.ingest_paths(saved)
         logger.info(f"Successfully ingested {len(saved)} files")
+        
+        # Prepare response with file names, captions, and transcripts
+        logger.info(f"Preparing response with audio_transcripts: {result.get('audio_transcripts', {})}")
+        ingested_files = []
+        for path in saved:
+            filename = os.path.basename(path)
+            file_info = {"filename": filename}
+            
+            # Check if this file has a BLIP caption (image)
+            if result.get("image_captions") and filename in result["image_captions"]:
+                caption = result["image_captions"][filename]
+                if caption:
+                    file_info["blip_caption"] = caption
+                    file_info["is_image"] = True
+                    logger.info(f"Added BLIP caption for {filename}")
+            
+            # Check if this file has an audio transcript
+            audio_transcripts = result.get("audio_transcripts", {})
+            logger.info(f"Checking audio_transcripts for {filename}: {filename in audio_transcripts}")
+            if filename in audio_transcripts:
+                transcript = audio_transcripts[filename]
+                logger.info(f"Found transcript for {filename}, length: {len(transcript) if transcript else 0}")
+                if transcript:
+                    file_info["audio_transcript"] = transcript
+                    file_info["is_audio"] = True
+                    logger.info(f"✅ Added audio transcript for {filename} (length: {len(transcript)} chars)")
+            
+            ingested_files.append(file_info)
+        
+        logger.info(f"Final ingested_files: {[f.get('filename') + (' (audio)' if f.get('is_audio') else '') + (' (image)' if f.get('is_image') else '') for f in ingested_files]}")
+        
+        return {
+            "ingested": [os.path.basename(x) for x in saved],
+            "files": ingested_files,
+            "stats": {
+                "text_chunks": result.get("text_chunks", 0),
+                "images": result.get("images", 0),
+                "facts": result.get("facts", 0)
+            }
+        }
     except Exception as e:
         logger.error(f"File ingestion failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-    return {"ingested": [os.path.basename(x) for x in saved]}
 
 @app.post("/api/ask")
 async def ask(payload: dict):
@@ -146,10 +184,10 @@ async def ask(payload: dict):
     
     try:
         res = pipeline.query(q, k)
-        logger.info("Query processed successfully")
+        logger.info(f"Query processed successfully - Response length: {len(res.get('main_response', ''))} chars")
         return JSONResponse(res)
     except Exception as e:
-        logger.error(f"Query processing failed: {str(e)}")
+        logger.error(f"Query processing failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
