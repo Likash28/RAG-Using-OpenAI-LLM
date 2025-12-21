@@ -15,8 +15,14 @@ class OpenAILLM:
         self.client = OpenAI(api_key=api_key)
         logger.info(f"OpenAI LLM initialized with model: {model_name}")
 
-    def generate_content(self, prompt: str) -> Tuple[str, Dict[str, int]]:
-        """Generate content using OpenAI. Returns (content, usage_info)"""
+    def generate_content(self, prompt: str, max_tokens: int = 1200) -> Tuple[str, Dict[str, int]]:
+        """
+        Generate content using OpenAI. Returns (content, usage_info)
+        
+        Args:
+            prompt: The prompt to send to OpenAI
+            max_tokens: Maximum tokens for response (default 1200, can be increased for longer analyses)
+        """
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -24,8 +30,9 @@ class OpenAILLM:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=1500,  # Reduced for faster response
-                timeout=30.0  # 30 second timeout to prevent hanging
+                max_tokens=max_tokens,  # Allow configurable max_tokens for longer responses
+                timeout=30.0,  # Increased timeout for longer sentiment analyses
+                stream=False  # Explicitly disable streaming for faster response
             )
             
             # Extract token usage information
@@ -49,8 +56,14 @@ class OpenAILLM:
             logger.error(f"OpenAI generation failed: {str(e)}")
             raise
 
-    def chat(self, messages: List[Dict[str, str]]) -> Tuple[str, Dict[str, int]]:
-        """Chat interface compatible with LangChain format. Returns (content, usage_info)"""
+    def chat(self, messages: List[Dict[str, str]], max_tokens: int = 1200) -> Tuple[str, Dict[str, int]]:
+        """
+        Chat interface compatible with LangChain format. Returns (content, usage_info)
+        
+        Args:
+            messages: List of message dictionaries
+            max_tokens: Maximum tokens for response (default 1200, can be increased for longer analyses)
+        """
         try:
             # Convert messages to OpenAI format
             openai_messages = []
@@ -71,8 +84,9 @@ class OpenAILLM:
                 model=self.model_name,
                 messages=openai_messages,
                 temperature=0.7,
-                max_tokens=1500,  # Reduced for faster response
-                timeout=30.0  # 30 second timeout to prevent hanging
+                max_tokens=max_tokens,  # Allow configurable max_tokens
+                timeout=30.0,  # Increased timeout for longer analyses
+                stream=False  # Explicitly disable streaming for faster response
             )
             
             # Extract token usage information

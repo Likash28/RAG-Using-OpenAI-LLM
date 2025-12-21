@@ -23,10 +23,10 @@ let selectedFileList = []; // Files selected but not yet uploaded
 let uploadedFileList = []; // Files that have been uploaded
 let isProcessing = false;
 
-// Supported file types - STRICT: Only audio, images, and txt files
+// Supported file types - Audio, images, text, and PDF files
 const SUPPORTED_AUDIO = ['mp3', 'wav', 'm4a', 'flac', 'ogg'];
 const SUPPORTED_IMAGE = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff'];
-const SUPPORTED_TEXT = ['txt']; // Only plain text files - NO PDF, DOC, DOCX
+const SUPPORTED_TEXT = ['txt', 'pdf']; // Plain text files and PDFs
 const ALL_SUPPORTED = [...SUPPORTED_AUDIO, ...SUPPORTED_IMAGE, ...SUPPORTED_TEXT];
 
 // Initialize
@@ -130,7 +130,7 @@ function addFilesToSelection(files) {
     const validFiles = files.filter(file => {
         if (!isValidFileType(file.name)) {
             const ext = file.name.split('.').pop()?.toLowerCase() || 'unknown';
-            addMessage('assistant', `⚠️ File "${file.name}" (${ext}) is not supported. Only audio files (mp3, wav, m4a, flac, ogg), image files (png, jpg, jpeg, webp, bmp, tiff), and text files (txt) are allowed.`, 'warning');
+            addMessage('assistant', `⚠️ File "${file.name}" (${ext}) is not supported. Only audio files (mp3, wav, m4a, flac, ogg), image files (png, jpg, jpeg, webp, bmp, tiff), and text files (txt, pdf) are allowed.`, 'warning');
             return false;
         }
         // Check for duplicates
@@ -243,60 +243,132 @@ async function submitFiles() {
             // This ensures isProcessing is false when queries execute
             hideLoading();
             
-            // Check if any images have BLIP captions or audio files have transcripts
+            // Check if any images have BLIP captions/OCR text or audio files have transcripts
             console.log('Ingestion result:', result);
             console.log('Files in result:', result.files);
-            const imageFiles = (result.files || []).filter(f => f.is_image && f.blip_caption);
-            const audioFiles = (result.files || []).filter(f => f.is_audio && f.audio_transcript);
-            console.log(`Found ${imageFiles.length} image file(s) with captions, ${audioFiles.length} audio file(s) with transcripts`);
             
-            if (imageFiles.length > 0 || audioFiles.length > 0) {
-                // Show success message
+            // Categorize all files properly
+            const imageFiles = (result.files || []).filter(f => f.is_image);
+            const audioFiles = (result.files || []).filter(f => f.is_audio);
+            const pdfFiles = (result.files || []).filter(f => f.is_pdf);
+            const textFiles = (result.files || []).filter(f => !f.is_image && !f.is_audio && !f.is_pdf);
+            
+            console.log(`Found ${imageFiles.length} image file(s), ${audioFiles.length} audio file(s), ${pdfFiles.length} PDF file(s), ${textFiles.length} text file(s)`);
+            
+            // Collect all files that need automatic queries
+            const filesToQuery = [];
+            
+            // Process image files
+            imageFiles.forEach((file) => {
+                // Always display BLIP caption if available
+                if (file.blip_caption) {
+                    displayImageCaption(file.filename, file.blip_caption);
+                }
+                
+                // Display OCR text if available (text > 200 chars was found)
+                if (file.ocr_text) {
+                    displayOCRText(file.filename, file.ocr_text);
+                    // Priority: Use OCR text for sentiment analysis
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.ocr_text.trim(),
+                        type: 'image_ocr',
+                        displayName: `OCR text from ${file.filename}`
+                    });
+                } else if (file.blip_caption) {
+                    // No OCR text, use BLIP caption for query
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.blip_caption,
+                        type: 'image_blip',
+                        displayName: `BLIP caption from ${file.filename}`
+                    });
+                }
+            });
+            
+            // Process audio files
+            audioFiles.forEach((file) => {
+                console.log(`Processing audio file: ${file.filename}, transcript length: ${file.audio_transcript ? file.audio_transcript.length : 0}`);
+                
+                if (!file.audio_transcript || file.audio_transcript.trim().length === 0) {
+                    console.warn(`⚠️ No transcript found for ${file.filename}`);
+                    return;
+                }
+                
+                displayAudioTranscript(file.filename, file.audio_transcript);
+                
+                filesToQuery.push({
+                    filename: file.filename,
+                    query: file.audio_transcript.trim(),
+                    type: 'audio',
+                    displayName: `Audio transcript from ${file.filename}`
+                });
+            });
+            
+            // Process PDF files - extract text and send for sentiment analysis
+            pdfFiles.forEach((file) => {
+                console.log(`Processing PDF file: ${file.filename}, text length: ${file.pdf_text ? file.pdf_text.length : 0}`);
+                
+                if (!file.pdf_text || file.pdf_text.trim().length === 0) {
+                    console.warn(`⚠️ No text found for PDF ${file.filename}`);
+                    return;
+                }
+                
+                // Display PDF text (similar to audio transcript)
+                displayPDFText(file.filename, file.pdf_text);
+                
+                // Send PDF text for sentiment analysis (similar to audio transcripts)
+                filesToQuery.push({
+                    filename: file.filename,
+                    query: file.pdf_text.trim(),
+                    type: 'pdf',
+                    displayName: `PDF text from ${file.filename}`
+                });
+            });
+            
+            // Show success message
+            if (filesToQuery.length > 0 || imageFiles.length > 0 || audioFiles.length > 0 || pdfFiles.length > 0 || textFiles.length > 0) {
                 addMessage('assistant', `✅ Successfully processed ${result.ingested.length} file(s)!`);
                 
-                let queryIndex = 0;
+                // Process all queries sequentially with minimal delays for faster response
+                // Reduced delay for better user experience while still avoiding API rate limits
+                let queryDelay = 500; // Start with 0.5 second delay (reduced from 1s)
+                const delayIncrement = 1000; // 1 second between each query (reduced from 2s)
                 
-                // Display BLIP captions for each image and automatically query LLM
-                imageFiles.forEach((file) => {
-                    displayImageCaption(file.filename, file.blip_caption);
-                    
-                    // Automatically query LLM with the BLIP caption text after a short delay
+                filesToQuery.forEach((fileQuery, index) => {
                     setTimeout(() => {
-                        const query = file.blip_caption;
-                        addMessage('user', query);
-                        queryLLM(query, false);
-                    }, 1000 + (queryIndex++ * 500));
-                });
-                
-                // Display audio transcripts for each audio file and automatically query LLM
-                audioFiles.forEach((file) => {
-                    console.log(`Processing audio file: ${file.filename}, transcript length: ${file.audio_transcript ? file.audio_transcript.length : 0}`);
-                    
-                    if (!file.audio_transcript || file.audio_transcript.trim().length === 0) {
-                        console.warn(`⚠️ No transcript found for ${file.filename}`);
-                        return;
-                    }
-                    
-                    displayAudioTranscript(file.filename, file.audio_transcript);
-                    
-                    // Automatically query LLM with the FULL audio transcript text after a short delay
-                    setTimeout(() => {
-                        const query = file.audio_transcript.trim();
-                        console.log(`🚀 Auto-querying LLM with audio transcript from ${file.filename}:`, query.substring(0, 100) + (query.length > 100 ? '...' : ''));
-                        console.log(`📝 Full transcript length: ${query.length} characters`);
+                        console.log(`🚀 Auto-querying LLM with ${fileQuery.type} from ${fileQuery.filename}:`, fileQuery.query.substring(0, 100) + (fileQuery.query.length > 100 ? '...' : ''));
+                        console.log(`📝 Full ${fileQuery.type} length: ${fileQuery.query.length} characters`);
                         
-                        // Add user message showing the query
-                        addMessage('user', query);
+                        // For audio transcripts and PDF text, show full text in user message
+                        if (fileQuery.type === 'audio' || fileQuery.type === 'pdf') {
+                            // Show full text for audio/PDF (it's already displayed above)
+                            const displayQuery = fileQuery.query.length > 500 
+                                ? fileQuery.query.substring(0, 500) + `\n\n... (${fileQuery.query.length - 500} more characters - full text sent for sentiment analysis)`
+                                : fileQuery.query;
+                            addMessage('user', `[${fileQuery.displayName}]\n${displayQuery}`);
+                        } else {
+                            // For images, show truncated version
+                            const displayQuery = fileQuery.query.length > 200 
+                                ? fileQuery.query.substring(0, 200) + '...' 
+                                : fileQuery.query;
+                            addMessage('user', `[${fileQuery.displayName}]\n${displayQuery}`);
+                        }
                         
-                        // Query LLM with the full transcript
-                        queryLLM(query, false).then(() => {
-                            console.log(`✅ Successfully processed automatic query for ${file.filename}`);
+                        // Query LLM with the full text for sentiment analysis
+                        queryLLM(fileQuery.query, false).then(() => {
+                            console.log(`✅ Successfully processed automatic query for ${fileQuery.filename} (${fileQuery.type})`);
                         }).catch(err => {
-                            console.error(`❌ Error in automatic audio query for ${file.filename}:`, err);
-                            addMessage('assistant', `Error processing audio transcript: ${err.message}`);
+                            console.error(`❌ Error in automatic query for ${fileQuery.filename} (${fileQuery.type}):`, err);
+                            addMessage('assistant', `Error processing ${fileQuery.type} from ${fileQuery.filename}: ${err.message}`);
                         });
-                    }, 1000 + (queryIndex++ * 500));
+                    }, queryDelay + (index * delayIncrement));
                 });
+                
+                // If no automatic queries but files were processed, show message
+                if (filesToQuery.length === 0 && (imageFiles.length > 0 || textFiles.length > 0)) {
+                    addMessage('assistant', 'You can now ask questions about the uploaded documents.');
+                }
             } else {
                 addMessage('assistant', `✅ Successfully processed ${result.ingested.length} file(s)! You can now ask questions about the uploaded documents.`);
             }
@@ -339,8 +411,11 @@ function displayAudioTranscript(filename, transcript) {
     
     const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
     
-    // Truncate transcript for display (show first 200 chars)
-    const preview = transcript.length > 200 ? transcript.substring(0, 200) + '...' : transcript;
+    // Show full transcript with scrollable container for long transcripts
+    const isLongTranscript = transcript.length > 500;
+    const displayText = isLongTranscript 
+        ? `<div style="max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">${transcript}</div>`
+        : `<p style="white-space: pre-wrap; word-wrap: break-word;">${transcript}</p>`;
     
     messageDiv.innerHTML = `
         <div class="message-content">
@@ -348,9 +423,11 @@ function displayAudioTranscript(filename, transcript) {
             <div class="caption-header">
                 <h4>Audio Transcript Generated</h4>
                 <span class="caption-filename">${filename}</span>
+                <span style="font-size: 0.8em; color: #888; margin-left: 10px;">(${transcript.length} characters)</span>
             </div>
             <div class="caption-content">
-                <p><strong>Transcript Preview:</strong> ${preview}</p>
+                <p><strong>Full Transcript:</strong></p>
+                ${displayText}
             </div>
             <div class="message-time">${time}</div>
         </div>
@@ -370,11 +447,73 @@ function displayImageCaption(filename, caption) {
         <div class="message-content">
             <i class="fas fa-image"></i>
             <div class="caption-header">
-                <h4>Image Caption Generated</h4>
+                <h4>Image Caption Generated (BLIP)</h4>
                 <span class="caption-filename">${filename}</span>
             </div>
             <div class="caption-content">
                 <p><strong>BLIP Description:</strong> ${caption}</p>
+            </div>
+            <div class="message-time">${time}</div>
+        </div>
+    `;
+    
+    messages.appendChild(messageDiv);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function displayOCRText(filename, ocrText) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message assistant ocr-text';
+    
+    const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    
+    // Truncate OCR text for display (show first 300 chars)
+    const preview = ocrText.length > 300 ? ocrText.substring(0, 300) + '...' : ocrText;
+    
+    messageDiv.innerHTML = `
+        <div class="message-content">
+            <i class="fas fa-file-alt"></i>
+            <div class="caption-header">
+                <h4>OCR Text Extracted</h4>
+                <span class="caption-filename">${filename}</span>
+            </div>
+            <div class="caption-content">
+                <p><strong>Extracted Text (${ocrText.length} chars):</strong></p>
+                <pre style="white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto;">${preview}</pre>
+                ${ocrText.length > 300 ? '<p><em>... (text truncated for display, full text will be used for sentiment analysis)</em></p>' : ''}
+            </div>
+            <div class="message-time">${time}</div>
+        </div>
+    `;
+    
+    messages.appendChild(messageDiv);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function displayPDFText(filename, pdfText) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message assistant pdf-text';
+    
+    const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    
+    // Show full PDF text with scrollable container for long text
+    const isLongText = pdfText.length > 500;
+    const displayText = isLongText 
+        ? `<div style="max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">${pdfText}</div>`
+        : `<p style="white-space: pre-wrap; word-wrap: break-word;">${pdfText}</p>`;
+    
+    messageDiv.innerHTML = `
+        <div class="message-content">
+            <i class="fas fa-file-pdf"></i>
+            <div class="caption-header">
+                <h4>PDF Text Extracted</h4>
+                <span class="caption-filename">${filename}</span>
+                <span style="font-size: 0.8em; color: #888; margin-left: 10px;">(${pdfText.length} characters)</span>
+            </div>
+            <div class="caption-content">
+                <p><strong>Full Text (extracted using unstructured):</strong></p>
+                ${displayText}
+                <p style="margin-top: 10px; font-size: 0.9em; color: #888;"><em>This text will be sent for sentiment analysis...</em></p>
             </div>
             <div class="message-time">${time}</div>
         </div>
@@ -432,6 +571,11 @@ async function queryLLM(query, showUserMessage = true) {
         console.log(`📤 Calling /api/ask with query (${query.length} chars):`, queryPreview);
         console.log(`📤 Query type: ${showUserMessage ? 'manual' : 'automatic'}`);
         
+        // For automatic queries (OCR text, audio transcripts), skip vector DB retrieval
+        // This makes sentiment analysis much faster - we already have the text!
+        const isAutomaticQuery = !showUserMessage;  // Automatic queries don't show user message
+        const skipRetrieval = isAutomaticQuery;  // Skip retrieval for automatic sentiment analysis
+        
         const response = await fetch(`${API_BASE_URL}/api/ask`, {
             method: 'POST',
             headers: {
@@ -439,7 +583,8 @@ async function queryLLM(query, showUserMessage = true) {
             },
             body: JSON.stringify({
                 query: query,
-                k: 5
+                k: 5,
+                skip_retrieval: skipRetrieval  // Skip vector DB retrieval for faster sentiment analysis
             })
         });
         

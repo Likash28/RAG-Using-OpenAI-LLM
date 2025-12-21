@@ -211,6 +211,7 @@ Pygments==2.19.2
 pyparsing==3.2.5
 pypdf==6.1.1
 pypdfium2==4.30.0
+PyMuPDF==1.25.3
 pyphen==0.17.2
 PyPika==0.48.9
 pyproject_hooks==1.2.0

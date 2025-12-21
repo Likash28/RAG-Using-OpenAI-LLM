@@ -11,7 +11,7 @@ from config import settings
 from logging_config import get_logger
 from embedder import TextEmbedder, BLIPMultimodal
 from vectorstore import DualIndex
-from extractors import partition_any, elements_to_text_chunks, transcribe_audio, extract_numeric_facts, Chunk
+from extractors import partition_any, elements_to_text_chunks, transcribe_audio, extract_numeric_facts, extract_ocr_text, extract_pdf_images, Chunk
 from openai_llm import OpenAILLM
 from prompts.loader import load_system_prompt, is_crisis_query, get_crisis_response, is_off_topic, get_off_topic_response
 
@@ -58,22 +58,26 @@ class RAGPipeline:
         return None
 
     # --------------- Ingest ---------------
-    def _process_single_file(self, p: str) -> Tuple[List[Chunk], Dict[str, Any], List[Tuple[str, str, float]], str, str]:
-        """Process a single file and return chunks, image data, facts, image caption, and audio transcript.
-        Returns: (chunks, image_data, facts, image_caption, audio_transcript)
+    def _process_single_file(self, p: str) -> Tuple[List[Chunk], List[Dict[str, Any]], List[Tuple[str, str, float]], Dict[str, str], str, Dict[str, str], str]:
+        """Process a single file and return chunks, image data, facts, image captions, audio transcript, OCR texts, and PDF text.
+        Returns: (chunks, image_data_list, facts, image_captions, audio_transcript, ocr_texts, pdf_text)
         - chunks: List of text chunks
-        - image_data: Dict with 'id', 'meta', 'emb' if image, else None
+        - image_data_list: List of Dict with 'id', 'meta', 'emb' for each image (empty list if no images)
         - facts: List of numeric facts
-        - image_caption: BLIP caption string if image, else None
+        - image_captions: Dict mapping image_id to BLIP caption string
         - audio_transcript: Transcript text if audio file, else None
+        - ocr_texts: Dict mapping image_id to OCR extracted text
+        - pdf_text: Full extracted text from PDF if PDF file, else None
         """
         ext = Path(p).suffix.lower().lstrip(".")
         source_id = os.path.basename(p)
         chunks = []
-        image_data = None
+        image_data_list = []  # Changed to list to handle multiple images from PDFs
         facts = []
-        image_caption = None
+        image_captions = {}  # Changed to dict to handle multiple captions
         audio_transcript = None
+        ocr_texts = {}  # Changed to dict to handle multiple OCR texts
+        pdf_text = None  # Full text extracted from PDF for sentiment analysis
 
         logger.info(f"🚀 Processing file: {source_id} ({ext})")
 
@@ -82,10 +86,11 @@ class RAGPipeline:
                 # Transcribe audio to text
                 logger.info(f"=== Transcribing audio file: {source_id} ===")
                 try:
+                    # Use settings from config (which reads from .env)
                     transcript = transcribe_audio(
                         p, 
-                        backend=os.getenv("OPENAI_WHISPER", settings.openai_whisper),
-                        model_size=settings.whisper_model_size
+                        backend=settings.openai_whisper,  # "local" or "none" from .env
+                        model_size=settings.whisper_model_size  # "tiny", "base", "small", etc. from .env
                     )
                 except Exception as e:
                     logger.error(f"❌ Error transcribing audio file {p}: {str(e)}", exc_info=True)
@@ -99,42 +104,168 @@ class RAGPipeline:
                         logger.info(f"Transcript preview: {transcript[:200]}...")
                         logger.info(f"=== End Transcription ===")
                         
-                        # Chunk the transcript like text files for better retrieval
-                        logger.info(f"Starting to chunk audio transcript for {source_id}...")
-                        try:
-                            class DummyElement:
-                                def __init__(self, text):
-                                    self.text = text
-                            
-                            logger.info(f"Creating DummyElement with transcript length: {len(transcript)}")
-                            dummy_element = DummyElement(transcript)
-                            logger.info(f"DummyElement created, accessing .text attribute...")
-                            test_text = dummy_element.text
-                            logger.info(f"DummyElement.text accessible, length: {len(test_text)}")
-                            
-                            logger.info(f"Calling elements_to_text_chunks...")
-                            transcript_chunks = elements_to_text_chunks(
-                                [dummy_element], 
-                                source=source_id,
-                                chunk_size=1000,
-                                overlap=150
-                            )
-                            logger.info(f"Chunking completed, got {len(transcript_chunks)} chunk(s)")
-                            
-                            for chunk in transcript_chunks:
-                                chunk.doc_type = "audio"
-                            chunks = transcript_chunks
-                            audio_transcript = transcript  # Store full transcript for return
-                            logger.info(f"✅ Audio transcript split into {len(chunks)} chunk(s) - ready for embedding")
-                        except Exception as chunk_error:
-                            logger.error(f"❌ Error chunking audio transcript: {str(chunk_error)}", exc_info=True)
-                            chunks = []
-                            audio_transcript = transcript  # Still store transcript even if chunking fails
+                        # ⚡ OPTIMIZATION: Skip chunking/embedding/storage for audio transcripts
+                        # Audio transcripts are sent directly to sentiment analysis, no need for vector DB
+                        # This significantly speeds up the process - no embedding delay!
+                        chunks = []  # No chunks - audio won't be stored in vector DB
+                        audio_transcript = transcript  # Store full transcript for return to frontend
+                        logger.info(f"✅ Audio transcript ready (skipping vector DB storage - will go directly to sentiment analysis)")
                     else:
                         logger.warning(f"⚠️ Audio transcription returned empty result for {source_id}")
                         chunks = []
                         audio_transcript = None
                     
+            elif ext == "pdf":
+                # PDF processing - extract images and text
+                logger.info(f"📄 Processing PDF file: {source_id}")
+                
+                # Extract text from PDF using unstructured (current package)
+                try:
+                    elements = partition_any(p)
+                    
+                    # Extract full text for sentiment analysis (similar to audio transcripts)
+                    full_text_parts = []
+                    for el in elements:
+                        try:
+                            text = el.text if hasattr(el, 'text') else str(el)
+                            if text and text.strip():
+                                full_text_parts.append(text.strip())
+                        except Exception as e:
+                            logger.debug(f"Error extracting text from element: {e}")
+                            continue
+                    
+                    # Combine all text into one string for sentiment analysis
+                    if full_text_parts:
+                        pdf_text = "\n\n".join(full_text_parts)
+                        logger.info(f"✅ Extracted {len(pdf_text)} characters of text from PDF for sentiment analysis")
+                        logger.info(f"PDF text preview: {pdf_text[:200]}...")
+                    else:
+                        logger.warning(f"⚠️ No text extracted from PDF {source_id}")
+                        pdf_text = None
+                    
+                    # Also create chunks for vector DB storage (for RAG queries)
+                    text_chunks = elements_to_text_chunks(elements, source=source_id)
+                    chunks.extend(text_chunks)
+                    logger.info(f"✅ Created {len(text_chunks)} text chunk(s) from PDF for vector DB storage")
+                    
+                except Exception as e:
+                    logger.warning(f"Error extracting text from PDF {p}: {str(e)}")
+                    pdf_text = None
+                
+                # Extract images from PDF using PyMuPDF
+                pdf_temp_dir = None
+                try:
+                    # Extract images to a temp directory
+                    import tempfile
+                    pdf_temp_dir = tempfile.mkdtemp(prefix=f"pdf_images_{source_id}_")
+                    pdf_images = extract_pdf_images(p, output_dir=pdf_temp_dir)
+                    logger.info(f"📸 Extracted {len(pdf_images)} image(s) from PDF")
+                    
+                    # Process each extracted image with BLIP
+                    for img_idx, img_path in enumerate(pdf_images):
+                        try:
+                            # Generate image embedding (with thread lock for safety)
+                            with self._blip_embedder_lock:
+                                img_emb = self.blip_embedder.embed_images([img_path])[0]
+                            
+                            # Create unique ID for this PDF image
+                            img_id = f"{source_id}::pdf_image::{img_idx + 1}"
+                            image_data = {
+                                "id": img_id,
+                                "meta": {
+                                    "source": source_id,
+                                    "image_path": os.path.abspath(img_path),
+                                    "pdf_page": img_idx + 1,
+                                    "is_pdf_image": True
+                                },
+                                "emb": img_emb
+                            }
+                            image_data_list.append(image_data)
+                            
+                            # Generate BLIP caption (with thread lock for safety)
+                            logger.info(f"=== Generating BLIP caption for PDF image {img_idx + 1}: {source_id} ===")
+                            try:
+                                with self._blip_embedder_lock:
+                                    blip_caption = self.blip_embedder.generate_caption(img_path)
+                                
+                                logger.info(f"=== BLIP CAPTION GENERATED ===")
+                                logger.info(f"PDF Image {img_idx + 1}: {source_id}")
+                                logger.info(f"Full Caption: {blip_caption}")
+                                logger.info(f"=== End of BLIP Caption ===")
+                                
+                                image_captions[img_id] = blip_caption
+                                
+                                # Add BLIP caption as chunk for Vector DB
+                                blip_chunk = Chunk(
+                                    id=f"{img_id}::blip_caption",
+                                    text=f"[PDF Image {img_idx + 1} Description from BLIP]: {blip_caption}",
+                                    source=source_id,
+                                    doc_type="pdf_image_caption"
+                                )
+                                chunks.append(blip_chunk)
+                                logger.info(f"✅ Added BLIP caption as chunk for PDF image {img_idx + 1}")
+                                
+                            except Exception as caption_error:
+                                logger.error(f"Error generating BLIP caption for PDF image {img_path}: {str(caption_error)}", exc_info=True)
+                            
+                            # Attempt OCR on PDF image
+                            logger.info(f"=== Attempting OCR extraction for PDF image {img_idx + 1}: {source_id} ===")
+                            try:
+                                extracted_ocr_text = extract_ocr_text(img_path)
+                                if extracted_ocr_text and len(extracted_ocr_text.strip()) > 0:
+                                    logger.info(f"✅ OCR extracted {len(extracted_ocr_text)} characters from PDF image {img_idx + 1}")
+                                    ocr_texts[img_id] = extracted_ocr_text
+                                    
+                                    # Create chunks from OCR text for Vector DB storage
+                                    class DummyElement:
+                                        def __init__(self, text):
+                                            self.text = text
+                                    
+                                    dummy_element = DummyElement(extracted_ocr_text)
+                                    ocr_chunks = elements_to_text_chunks(
+                                        [dummy_element], 
+                                        source=source_id,
+                                        chunk_size=1000,
+                                        overlap=150
+                                    )
+                                    
+                                    # Mark OCR chunks with doc_type
+                                    for chunk in ocr_chunks:
+                                        chunk.doc_type = "pdf_ocr_text"
+                                        chunk.id = f"{img_id}::ocr_chunk::{chunk.id.split('::')[-1]}"
+                                    
+                                    chunks.extend(ocr_chunks)
+                                    logger.info(f"✅ PDF image OCR text split into {len(ocr_chunks)} chunk(s)")
+                                else:
+                                    logger.info(f"⚠️ OCR found no text in PDF image {img_idx + 1}")
+                            except Exception as ocr_error:
+                                logger.warning(f"⚠️ OCR extraction failed for PDF image {img_path}: {str(ocr_error)}")
+                                
+                        except Exception as img_error:
+                            logger.error(f"Error processing PDF image {img_path}: {str(img_error)}", exc_info=True)
+                            continue
+                    
+                    logger.info(f"✅ Processed {len(image_data_list)} image(s) from PDF {source_id}")
+                    
+                    # Clean up temp directory after processing all images
+                    if pdf_temp_dir and os.path.exists(pdf_temp_dir):
+                        try:
+                            import shutil
+                            shutil.rmtree(pdf_temp_dir)
+                            logger.info(f"✅ Cleaned up temp directory for PDF {source_id}")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Could not clean up temp directory {pdf_temp_dir}: {str(cleanup_error)}")
+                    
+                except Exception as pdf_error:
+                    logger.error(f"Error extracting images from PDF {p}: {str(pdf_error)}", exc_info=True)
+                    # Clean up temp directory on error
+                    if pdf_temp_dir and os.path.exists(pdf_temp_dir):
+                        try:
+                            import shutil
+                            shutil.rmtree(pdf_temp_dir)
+                        except Exception:
+                            pass
+                
             elif ext in {"png", "jpg", "jpeg", "webp", "bmp", "tiff"}:
                 # Image processing
                 try:
@@ -145,14 +276,15 @@ class RAGPipeline:
                     # Generate image embedding (with thread lock for safety)
                     with self._blip_embedder_lock:
                         img_emb = self.blip_embedder.embed_images([p])[0]
+                    img_id = f"{source_id}::image"
                     image_data = {
-                        "id": f"{source_id}::image",
+                        "id": img_id,
                         "meta": {"source": source_id, "image_path": os.path.abspath(p)},
                         "emb": img_emb
                     }
+                    image_data_list.append(image_data)
                     
                     # Generate BLIP caption (with thread lock for safety)
-                    # Note: Timeout is handled at the file processing level
                     logger.info(f"=== Generating BLIP caption for image: {source_id} ===")
                     try:
                         with self._blip_embedder_lock:
@@ -163,20 +295,80 @@ class RAGPipeline:
                         logger.info(f"Full Caption: {blip_caption}")
                         logger.info(f"=== End of BLIP Caption ===")
                         
-                        image_caption = blip_caption
-                        blip_chunk = Chunk(
-                            id=f"{source_id}::blip_caption",
-                            text=f"[Image Description from BLIP]: {blip_caption}",
-                            source=source_id,
-                            doc_type="image_caption"
-                        )
-                        chunks = [blip_chunk]
-                        logger.info(f"BLIP caption stored as text chunk")
+                        image_captions[img_id] = blip_caption
                     except Exception as caption_error:
                         logger.error(f"Error generating BLIP caption for {p}: {str(caption_error)}", exc_info=True)
-                        # Continue without caption - image embedding is still stored
-                        chunks = []
-                        image_caption = None
+                    
+                    # ⚡ OCR Processing: Always attempt OCR for images with text
+                    # OCR text will be stored in Vector DB AND sent for sentiment analysis
+                    logger.info(f"=== Attempting OCR extraction for image: {source_id} ===")
+                    try:
+                        extracted_ocr_text = extract_ocr_text(p)
+                        if extracted_ocr_text and len(extracted_ocr_text.strip()) > 0:
+                            logger.info(f"✅ OCR extracted {len(extracted_ocr_text)} characters from {source_id}")
+                            ocr_texts[img_id] = extracted_ocr_text
+                            
+                            # Create chunks from OCR text for Vector DB storage
+                            class DummyElement:
+                                def __init__(self, text):
+                                    self.text = text
+                            
+                            dummy_element = DummyElement(extracted_ocr_text)
+                            ocr_chunks = elements_to_text_chunks(
+                                [dummy_element], 
+                                source=source_id,
+                                chunk_size=1000,
+                                overlap=150
+                            )
+                            
+                            # Mark OCR chunks with doc_type
+                            for chunk in ocr_chunks:
+                                chunk.doc_type = "ocr_text"
+                            
+                            chunks = ocr_chunks  # Use OCR chunks for Vector DB
+                            logger.info(f"✅ OCR text split into {len(chunks)} chunk(s) - will be stored in Vector DB")
+                            
+                            # Also add BLIP caption as additional chunk if available (for better context)
+                            if img_id in image_captions:
+                                blip_caption = image_captions[img_id]
+                                blip_chunk = Chunk(
+                                    id=f"{img_id}::blip_caption",
+                                    text=f"[Image Description from BLIP]: {blip_caption}",
+                                    source=source_id,
+                                    doc_type="image_caption"
+                                )
+                                chunks.append(blip_chunk)
+                                logger.info(f"✅ Added BLIP caption as additional chunk for context")
+                        else:
+                            logger.info(f"⚠️ OCR found no text in image {source_id} (or text too short)")
+                            # Fallback to BLIP caption if no OCR text
+                            if img_id in image_captions:
+                                blip_caption = image_captions[img_id]
+                                blip_chunk = Chunk(
+                                    id=f"{img_id}::blip_caption",
+                                    text=f"[Image Description from BLIP]: {blip_caption}",
+                                    source=source_id,
+                                    doc_type="image_caption"
+                                )
+                                chunks = [blip_chunk]
+                                logger.info(f"✅ Using BLIP caption as fallback (no OCR text found)")
+                            else:
+                                chunks = []
+                    except Exception as ocr_error:
+                        logger.warning(f"⚠️ OCR extraction failed for {source_id}: {str(ocr_error)}")
+                        # Fallback to BLIP caption if OCR fails
+                        if img_id in image_captions:
+                            blip_caption = image_captions[img_id]
+                            blip_chunk = Chunk(
+                                id=f"{img_id}::blip_caption",
+                                text=f"[Image Description from BLIP]: {blip_caption}",
+                                source=source_id,
+                                doc_type="image_caption"
+                            )
+                            chunks = [blip_chunk]
+                            logger.info(f"✅ Using BLIP caption as fallback (OCR failed)")
+                        else:
+                            chunks = []
                         
                 except Exception as e:
                     error_msg = str(e)
@@ -193,7 +385,7 @@ class RAGPipeline:
                     else:
                         logger.error(f"Error processing image {p}: {error_msg}", exc_info=True)
                         chunks = []
-                        image_data = None
+                        image_data_list = []
                 
                 # Skip OCR for speed - BLIP captions are sufficient
                 # OCR is slow and optional, so we skip it to speed up ingestion
@@ -234,15 +426,19 @@ class RAGPipeline:
                 chunks = []
             if facts is None:
                 facts = []
-            if image_data is None:
-                image_data = None
-            if image_caption is None:
-                image_caption = None
+            if image_data_list is None:
+                image_data_list = []
+            if image_captions is None:
+                image_captions = {}
             if audio_transcript is None:
                 audio_transcript = None
+            if ocr_texts is None:
+                ocr_texts = {}
+            if pdf_text is None:
+                pdf_text = None
         
-        logger.info(f"🔚 Returning from _process_single_file for {source_id}: {len(chunks)} chunks, {len(facts)} facts, audio_transcript={'present' if audio_transcript else 'None'}")
-        return chunks, image_data, facts, image_caption, audio_transcript
+        logger.info(f"🔚 Returning from _process_single_file for {source_id}: {len(chunks)} chunks, {len(image_data_list)} images, {len(facts)} facts, {len(image_captions)} captions, audio_transcript={'present' if audio_transcript else 'None'}, {len(ocr_texts)} OCR texts, pdf_text={'present' if pdf_text else 'None'}")
+        return chunks, image_data_list, facts, image_captions, audio_transcript, ocr_texts, pdf_text
 
     def ingest_paths(self, paths: List[str]) -> Dict[str, Any]:
         logger.info(f"Starting parallel ingestion of {len(paths)} files")
@@ -256,6 +452,8 @@ class RAGPipeline:
         all_facts = []  # Collect all facts
         image_captions = {}  # Store captions for return
         audio_transcripts = {}  # Store audio transcripts for return
+        ocr_texts = {}  # Store OCR texts for return
+        pdf_texts = {}  # Store PDF texts for return (for sentiment analysis)
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all files for processing
@@ -273,33 +471,48 @@ class RAGPipeline:
                 logger.info(f"⏳ Waiting for result from {os.path.basename(p)}...")
                 try:
                     # Get result with timeout
-                    chunks, image_data, facts, image_caption, audio_transcript = future.result(timeout=max_file_time)
-                    logger.info(f"✅ Got result from {os.path.basename(p)}: {len(chunks)} chunks, audio_transcript={'present' if audio_transcript else 'None'}")
+                    chunks, image_data_list, facts, file_image_captions, audio_transcript, file_ocr_texts, pdf_text = future.result(timeout=max_file_time)
+                    logger.info(f"✅ Got result from {os.path.basename(p)}: {len(chunks)} chunks, {len(image_data_list)} images, audio_transcript={'present' if audio_transcript else 'None'}, {len(file_ocr_texts)} OCR texts, pdf_text={'present' if pdf_text else 'None'}")
                     
                     # Collect chunks for batch embedding later
                     if chunks:
                         all_chunks.extend(chunks)
                         logger.info(f"Collected {len(chunks)} chunk(s) from {os.path.basename(p)}")
                     
-                    # Collect image data
-                    if image_data:
-                        all_image_data.append((image_data, p, image_caption))
-                        logger.info(f"Collected image data from {os.path.basename(p)}")
+                    # Collect image data (now a list, can have multiple images from PDFs)
+                    if image_data_list:
+                        for img_data in image_data_list:
+                            # Get caption for this specific image
+                            img_id = img_data.get("id", "")
+                            img_caption = file_image_captions.get(img_id)
+                            all_image_data.append((img_data, p, img_caption))
+                        logger.info(f"Collected {len(image_data_list)} image(s) from {os.path.basename(p)}")
                     
                     # Collect facts
                     if facts:
                         all_facts.extend(facts)
                         logger.info(f"Collected {len(facts)} fact(s) from {os.path.basename(p)}")
                     
-                    # Store image captions
-                    if image_caption:
-                        source_id = os.path.basename(p)
-                        image_captions[source_id] = image_caption
+                    # Store image captions (merge into main dict)
+                    if file_image_captions:
+                        image_captions.update(file_image_captions)
+                        logger.info(f"Stored {len(file_image_captions)} image caption(s) from {os.path.basename(p)}")
                     
                     # Store audio transcripts
                     if audio_transcript:
                         source_id = os.path.basename(p)
                         audio_transcripts[source_id] = audio_transcript
+                    
+                    # Store OCR texts (merge into main dict)
+                    if file_ocr_texts:
+                        ocr_texts.update(file_ocr_texts)
+                        logger.info(f"Stored {len(file_ocr_texts)} OCR text(s) from {os.path.basename(p)}")
+                    
+                    # Store PDF text for sentiment analysis (similar to audio transcripts)
+                    if pdf_text:
+                        source_id = os.path.basename(p)
+                        pdf_texts[source_id] = pdf_text
+                        logger.info(f"✅ Stored PDF text from {source_id} ({len(pdf_text)} chars) for sentiment analysis")
                     
                     elapsed = time.time() - file_start
                     logger.info(f"✅ Completed processing: {os.path.basename(p)} (took {elapsed:.2f}s)")
@@ -314,21 +527,37 @@ class RAGPipeline:
             total_time = time.time() - start_time
             logger.info(f"All files processed in {total_time:.2f}s")
         
-        # Now batch process all collected data
-        logger.info(f"Batch processing {len(all_chunks)} text chunk(s) and {len(all_image_data)} image(s)...")
+        # ⚡ PERFORMANCE ANALYSIS: Log timing for each stage
+        import time
+        post_processing_start = time.time()
+        logger.info(f"⏱️  TIMING: File processing completed in {total_time:.2f}s")
+        logger.info(f"⏱️  TIMING: Starting post-processing (embedding + storage)")
         
-        # Batch embed all text chunks at once (much faster than one-by-one)
-        # NOTE: Text chunks (from .txt files, audio transcripts, or BLIP captions) use TextEmbedder, NOT BLIP
+        # Prepare result with transcripts/captions (ready immediately)
+        logger.info(f"📊 Audio transcripts ready: {list(audio_transcripts.keys())} with {sum(1 for t in audio_transcripts.values() if t)} non-empty")
+        logger.info(f"📊 OCR texts ready: {list(ocr_texts.keys())} with {sum(1 for t in ocr_texts.values() if t)} non-empty")
+        logger.info(f"📊 PDF texts ready: {list(pdf_texts.keys())} with {sum(1 for t in pdf_texts.values() if t)} non-empty")
+        
+        # Batch embed all text chunks at once (OPTIMIZED for speed)
+        # NOTE: Audio transcripts are NOT included here - they skip vector DB storage
         text_ids, text_docs, text_meta, text_embs = [], [], [], []
+        embed_time = 0
         if all_chunks:
-            text_ids = [c.id for c in all_chunks]
-            text_docs = [c.text for c in all_chunks]
-            text_meta = [{"source": c.source, "doc_type": c.doc_type} for c in all_chunks]
-            logger.info(f"📝 Generating text embeddings for {len(text_docs)} chunk(s) using TextEmbedder (NOT BLIP)...")
-            text_embs = self.text_embedder.embed_texts(text_docs)  # Batch embedding - no lock needed in main thread
-            logger.info(f"✅ Text embeddings generated successfully (using TextEmbedder, not BLIP)")
+            # Filter out any audio chunks (shouldn't be any, but just in case)
+            non_audio_chunks = [c for c in all_chunks if c.doc_type != "audio"]
+            if non_audio_chunks:
+                text_ids = [c.id for c in non_audio_chunks]
+                text_docs = [c.text for c in non_audio_chunks]
+                text_meta = [{"source": c.source, "doc_type": c.doc_type} for c in non_audio_chunks]
+                logger.info(f"📝 Embedding {len(text_docs)} chunk(s) (audio transcripts excluded - they skip vector DB)...")
+                embed_start = time.time()
+                text_embs = self.text_embedder.embed_texts(text_docs)  # Batch embedding
+                embed_time = time.time() - embed_start
+                logger.info(f"⏱️  TIMING: Embedding took {embed_time:.2f}s ({len(text_docs)} chunks)")
+            else:
+                logger.info(f"📝 No non-audio chunks to embed (all chunks were audio - skipping embedding)")
         
-        # Process all image data
+        # Process all image data (already embedded, just collecting)
         img_ids, img_meta, img_embs = [], [], []
         for image_data, p, image_caption in all_image_data:
             img_ids.append(image_data["id"])
@@ -337,32 +566,82 @@ class RAGPipeline:
         
         facts_to_insert = all_facts
 
-        # Batch insert all data at once
-        logger.info(f"Storing processed data in vector database...")
+        # Batch insert all data at once (OPTIMIZED)
+        logger.info(f"💾 Storing in vector database...")
+        store_start = time.time()
         if text_ids:
-            logger.info(f"Adding {len(text_ids)} text chunk(s) to vector database...")
             self.index.add_texts(text_ids, text_docs, text_meta, text_embs)
         if img_ids:
-            logger.info(f"Adding {len(img_ids)} image(s) to vector database...")
             self.index.add_images(img_ids, img_meta, img_embs)
         if facts_to_insert:
-            logger.info(f"Storing {len(facts_to_insert)} numeric fact(s) in database...")
             with sqlite3.connect(self.sqlite_path) as con:
                 con.executemany("INSERT OR IGNORE INTO facts (source, key, value) VALUES (?, ?, ?)", facts_to_insert)
                 con.commit()
+        store_time = time.time() - store_start
+        logger.info(f"⏱️  TIMING: Storage took {store_time:.2f}s")
         
-        logger.info(f"✅ Ingestion completed - Text chunks: {len(text_ids)}, Images: {len(img_ids)}, Facts: {len(facts_to_insert)}")
-        logger.info(f"📊 Returning audio_transcripts: {list(audio_transcripts.keys())} with {sum(1 for t in audio_transcripts.values() if t)} non-empty transcript(s)")
+        post_processing_time = time.time() - post_processing_start
+        total_ingestion_time = time.time() - start_time
         
-        # Return ingestion results including image captions and audio transcripts
+        # ⚡ PERFORMANCE SUMMARY
+        logger.info(f"⏱️  ========== PERFORMANCE SUMMARY ==========")
+        logger.info(f"⏱️  File Processing: {total_time:.2f}s")
+        logger.info(f"⏱️  Embedding: {embed_time:.2f}s ({len(text_ids)} chunks)")
+        logger.info(f"⏱️  Storage: {store_time:.2f}s")
+        logger.info(f"⏱️  Post-processing Total: {post_processing_time:.2f}s")
+        logger.info(f"⏱️  TOTAL INGESTION TIME: {total_ingestion_time:.2f}s")
+        logger.info(f"⏱️  ===========================================")
+        
+        # Create filename-based mapping for backward compatibility with app.py
+        # For PDFs with multiple images, combine all captions
+        image_captions_by_filename = {}
+        for img_data, p, img_caption in all_image_data:
+            filename = os.path.basename(p)
+            if img_caption:
+                if filename not in image_captions_by_filename:
+                    image_captions_by_filename[filename] = []
+                image_captions_by_filename[filename].append(img_caption)
+        
+        # Convert lists to single strings for single images, keep lists for PDFs
+        for filename, captions in image_captions_by_filename.items():
+            if len(captions) == 1:
+                image_captions_by_filename[filename] = captions[0]
+            else:
+                # For multiple images (PDFs), combine with separators
+                image_captions_by_filename[filename] = " | ".join([f"Image {i+1}: {cap}" for i, cap in enumerate(captions)])
+        
+        # Create filename-based OCR texts mapping
+        ocr_texts_by_filename = {}
+        for img_id, ocr_text in ocr_texts.items():
+            # Extract filename from image_id (format: "filename::pdf_image::1" or "filename::image")
+            if "::" in img_id:
+                filename = img_id.split("::")[0]
+            else:
+                filename = img_id
+            
+            if filename not in ocr_texts_by_filename:
+                ocr_texts_by_filename[filename] = []
+            ocr_texts_by_filename[filename].append(ocr_text)
+        
+        # Convert lists to single strings for single images, keep combined for multiple
+        for filename, texts in ocr_texts_by_filename.items():
+            if len(texts) == 1:
+                ocr_texts_by_filename[filename] = texts[0]
+            else:
+                # For multiple images (PDFs), combine with separators
+                ocr_texts_by_filename[filename] = " | ".join([f"Image {i+1}: {text}" for i, text in enumerate(texts)])
+        
+        # Return result with all data
         result = {
             "text_chunks": len(text_ids),
             "images": len(img_ids),
             "facts": len(facts_to_insert),
-            "image_captions": image_captions,
-            "audio_transcripts": audio_transcripts
+            "image_captions": image_captions_by_filename,  # Keyed by filename for app.py compatibility
+            "audio_transcripts": audio_transcripts,
+            "ocr_texts": ocr_texts_by_filename,  # Keyed by filename for app.py compatibility
+            "pdf_texts": pdf_texts  # Keyed by filename for sentiment analysis
         }
-        logger.info(f"📤 Returning ingestion result with {len(audio_transcripts)} audio transcript(s)")
+        logger.info(f"📤 Returning result - Transcripts and PDF texts ready for sentiment analysis")
         return result
 
     # --------------- Retrieve ---------------
@@ -419,13 +698,78 @@ class RAGPipeline:
         return {"results": ranked}
 
     # --------------- Generate ---------------
-    def answer(self, query: str, contexts: List[Dict[str, Any]]) -> Dict[str, str]:
+    def answer(self, query: str, contexts: List[Dict[str, Any]], is_sentiment_analysis: bool = False) -> Dict[str, str]:
+        """
+        Generate answer from query and contexts.
+        
+        Args:
+            query: The query string (full text for sentiment analysis)
+            contexts: Retrieved contexts from vector DB (empty for direct sentiment analysis)
+            is_sentiment_analysis: If True, this is a direct sentiment analysis query (skip retrieval was used)
+        """
         if self.llm is None:
             return {
                 "main_response": "LLM not configured. Please set up your API key in the .env file to enable question answering.",
                 "sentiment_analysis": ""
             }
         
+        # For direct sentiment analysis (skip_retrieval=True), use optimized prompt
+        if is_sentiment_analysis:
+            logger.info(f"⚡ Direct sentiment analysis mode - processing {len(query)} characters of text")
+            
+            # Load system prompt
+            system_prompt = load_system_prompt()
+            
+            # For sentiment analysis, send the FULL text without truncation
+            # Create optimized prompt for sentiment analysis
+            prompt = f"""{system_prompt}
+
+## Text for Sentiment Analysis
+Please analyze the following text for sentiment, emotional tone, and mental health indicators. Provide a comprehensive analysis.
+
+Text to analyze:
+{query}
+
+## Your Response
+Please provide:
+1. Main Response: A summary of the text content
+2. Sentiment Analysis: A detailed sentiment analysis including:
+   - Overall emotional tone
+   - Key emotional indicators
+   - Mental health concerns (if any)
+   - Risk factors (if any)
+   - Recommendations (if appropriate)
+
+Format your response with "--- SENTIMENT ANALYSIS ---" separating the main response from the detailed sentiment analysis."""
+            
+            logger.info(f"📤 Sending full text ({len(query)} chars) to LLM for sentiment analysis")
+            
+            try:
+                # Use higher max_tokens for comprehensive sentiment analysis
+                resp, usage_info = self.llm.generate_content(prompt, max_tokens=3000)
+                logger.info(f"✅ Sentiment analysis generated - {usage_info.get('total_tokens', 0)} tokens used")
+                
+                # Parse the response to separate main content from sentiment analysis
+                if "--- SENTIMENT ANALYSIS ---" in resp:
+                    parts = resp.split("--- SENTIMENT ANALYSIS ---")
+                    main_response = parts[0].strip()
+                    sentiment_analysis = parts[1].strip() if len(parts) > 1 else ""
+                else:
+                    main_response = resp
+                    sentiment_analysis = ""
+                
+                return {
+                    "main_response": main_response,
+                    "sentiment_analysis": sentiment_analysis
+                }
+            except Exception as e:
+                logger.error(f"Sentiment analysis generation failed: {str(e)}")
+                return {
+                    "main_response": f"Sorry, I encountered an error while generating the sentiment analysis: {str(e)}",
+                    "sentiment_analysis": ""
+                }
+        
+        # Normal RAG flow (with contexts from vector DB)
         # Check for crisis situations first
         if is_crisis_query(query):
             logger.warning("Crisis query detected - providing emergency response")
@@ -455,9 +799,9 @@ class RAGPipeline:
         # Load system prompt
         system_prompt = load_system_prompt()
         
-        # Build context from retrieved documents - limit to top 3 most relevant
+        # Build context from retrieved documents - limit to top 2 most relevant for faster response
         # This speeds up LLM response by reducing context size
-        max_contexts = min(len(contexts), 3)  # Limit to top 3 contexts for faster response
+        max_contexts = min(len(contexts), 2)  # Reduced from 3 to 2 for faster processing
         contexts = contexts[:max_contexts]
         
         ctx_blocks = []
@@ -468,9 +812,9 @@ class RAGPipeline:
             text = c.get("document") or ""
             metadata = c.get("metadata") or {}
             
-            # Limit text length to prevent overly long contexts (max 500 chars per document)
-            if len(text) > 500:
-                text = text[:500] + "..."
+            # Limit text length to prevent overly long contexts (max 400 chars per document for speed)
+            if len(text) > 400:
+                text = text[:400] + "..."
             
             if metadata.get("modality") == "image":
                 # For images, use BLIP caption from metadata (already fetched in retrieve)
@@ -504,20 +848,13 @@ class RAGPipeline:
 ## Your Response
 Please respond according to the protocols outlined above:"""
         
-        # Log prompt summary (reduced logging for speed)
-        logger.info(f"Sending query to LLM with {len(ctx_blocks)} context document(s), total prompt length: {len(prompt)} chars")
+        # Minimal logging for speed
+        logger.debug(f"Sending query to LLM with {len(ctx_blocks)} context document(s), total prompt length: {len(prompt)} chars")
         
         try:
             # Generate response with optimized prompt
             resp, usage_info = self.llm.generate_content(prompt)
-            logger.info("Answer generated successfully")
-            
-            # Log token usage summary at pipeline level
-            logger.info(f"=== LLM Call Summary ===")
-            logger.info(f"Query: {query[:100]}..." if len(query) > 100 else f"Query: {query}")
-            logger.info(f"Context Documents Used: {len(contexts)}")
-            logger.info(f"Token Usage - Input: {usage_info.get('prompt_tokens', 0)}, Output: {usage_info.get('completion_tokens', 0)}, Total: {usage_info.get('total_tokens', 0)}")
-            logger.info(f"=== End LLM Call Summary ===")
+            logger.debug(f"Answer generated successfully - {usage_info.get('total_tokens', 0)} tokens used")
             
             # Parse the response to separate main content from sentiment analysis
             if "--- SENTIMENT ANALYSIS ---" in resp:
@@ -539,14 +876,35 @@ Please respond according to the protocols outlined above:"""
                 "sentiment_analysis": ""
             }
 
-    def query(self, query: str, k: int) -> Dict[str, Any]:
-        retrieved = self.retrieve(query, k)
-        answer_data = self.answer(query, retrieved["results"])
-        return {
-            "main_response": answer_data["main_response"],
-            "sentiment_analysis": answer_data["sentiment_analysis"],
-            "contexts": retrieved["results"]
-        }
+    def query(self, query: str, k: int, skip_retrieval: bool = False) -> Dict[str, Any]:
+        """
+        Query the RAG pipeline.
+        
+        Args:
+            query: The query string
+            k: Number of results to retrieve
+            skip_retrieval: If True, skip vector DB retrieval and go directly to sentiment analysis
+                           (Useful for OCR text/audio transcripts that don't need retrieval)
+        """
+        if skip_retrieval:
+            # Direct sentiment analysis - no vector DB retrieval needed
+            # This is much faster for OCR text and audio transcripts
+            logger.info(f"⚡ Skipping vector DB retrieval - direct sentiment analysis for {len(query)} characters")
+            answer_data = self.answer(query, [], is_sentiment_analysis=True)  # Pass flag for sentiment analysis
+            return {
+                "main_response": answer_data["main_response"],
+                "sentiment_analysis": answer_data["sentiment_analysis"],
+                "contexts": []  # No contexts retrieved
+            }
+        else:
+            # Normal RAG flow: retrieve from vector DB, then answer
+            retrieved = self.retrieve(query, k)
+            answer_data = self.answer(query, retrieved["results"], is_sentiment_analysis=False)
+            return {
+                "main_response": answer_data["main_response"],
+                "sentiment_analysis": answer_data["sentiment_analysis"],
+                "contexts": retrieved["results"]
+            }
 
     def reset(self):
         self.index.reset()
