@@ -127,8 +127,9 @@ async def ingest(files: List[UploadFile] = File(...)):
         result = pipeline.ingest_paths(saved)
         logger.info(f"Successfully ingested {len(saved)} files")
         
-        # Prepare response with file names, captions, and transcripts
+        # Prepare response with file names, captions, transcripts, and PDF texts
         logger.info(f"Preparing response with audio_transcripts: {result.get('audio_transcripts', {})}")
+        logger.info(f"Preparing response with pdf_texts: {result.get('pdf_texts', {})}")
         ingested_files = []
         for path in saved:
             filename = os.path.basename(path)
@@ -153,6 +154,17 @@ async def ingest(files: List[UploadFile] = File(...)):
                     file_info["is_audio"] = True
                     logger.info(f"✅ Added audio transcript for {filename} (length: {len(transcript)} chars)")
             
+            # Check if this file is a PDF with extracted text
+            pdf_texts = result.get("pdf_texts", {})
+            logger.info(f"Checking pdf_texts for {filename}: {filename in pdf_texts}")
+            if filename in pdf_texts:
+                pdf_text = pdf_texts[filename]
+                logger.info(f"Found PDF text for {filename}, length: {len(pdf_text) if pdf_text else 0}")
+                if pdf_text:
+                    file_info["pdf_text"] = pdf_text
+                    file_info["is_pdf"] = True
+                    logger.info(f"✅ Added PDF text for {filename} (length: {len(pdf_text)} chars)")
+            
             ingested_files.append(file_info)
         
         logger.info(f"Final ingested_files: {[f.get('filename') + (' (audio)' if f.get('is_audio') else '') + (' (image)' if f.get('is_image') else '') for f in ingested_files]}")
@@ -175,15 +187,16 @@ async def ask(payload: dict):
     pipeline = get_pipeline()
     q = payload.get("query")
     k = int(payload.get("k", settings.top_k))
+    skip_retrieval = payload.get("skip_retrieval", False)
     
     if not q:
         logger.warning("Query request missing 'query' parameter")
         raise HTTPException(status_code=400, detail="Missing 'query'")
     
-    logger.info(f"Processing query: {q[:100]}{'...' if len(q) > 100 else ''}")
+    logger.info(f"Processing query: {q[:100]}{'...' if len(q) > 100 else ''} (skip_retrieval={skip_retrieval})")
     
     try:
-        res = pipeline.query(q, k)
+        res = pipeline.query(q, k, skip_retrieval=skip_retrieval)
         logger.info(f"Query processed successfully - Response length: {len(res.get('main_response', ''))} chars")
         return JSONResponse(res)
     except Exception as e:

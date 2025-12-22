@@ -120,6 +120,7 @@ class RAGPipeline:
                 logger.info(f"📄 Processing PDF file: {source_id}")
                 
                 # Extract text from PDF using unstructured (current package)
+                # Fallback to PyMuPDF if unstructured fails (e.g., poppler not installed)
                 try:
                     elements = partition_any(p)
                     
@@ -149,8 +150,43 @@ class RAGPipeline:
                     logger.info(f"✅ Created {len(text_chunks)} text chunk(s) from PDF for vector DB storage")
                     
                 except Exception as e:
-                    logger.warning(f"Error extracting text from PDF {p}: {str(e)}")
-                    pdf_text = None
+                    logger.warning(f"Error extracting text from PDF {p} using unstructured: {str(e)}")
+                    logger.info(f"🔄 Attempting fallback PDF text extraction using PyMuPDF...")
+                    
+                    # Fallback: Use PyMuPDF to extract text directly
+                    try:
+                        import fitz  # PyMuPDF
+                        doc = fitz.open(p)
+                        full_text_parts = []
+                        
+                        for page_num in range(len(doc)):
+                            page = doc[page_num]
+                            page_text = page.get_text()
+                            if page_text and page_text.strip():
+                                full_text_parts.append(page_text.strip())
+                        
+                        doc.close()
+                        
+                        if full_text_parts:
+                            pdf_text = "\n\n".join(full_text_parts)
+                            logger.info(f"✅ Extracted {len(pdf_text)} characters of text from PDF using PyMuPDF fallback")
+                            logger.info(f"PDF text preview: {pdf_text[:200]}...")
+                            
+                            # Create chunks from extracted text
+                            class DummyElement:
+                                def __init__(self, text):
+                                    self.text = text
+                            
+                            dummy_elements = [DummyElement(text) for text in full_text_parts]
+                            text_chunks = elements_to_text_chunks(dummy_elements, source=source_id)
+                            chunks.extend(text_chunks)
+                            logger.info(f"✅ Created {len(text_chunks)} text chunk(s) from PDF using PyMuPDF fallback")
+                        else:
+                            logger.warning(f"⚠️ No text extracted from PDF {source_id} using PyMuPDF fallback")
+                            pdf_text = None
+                    except Exception as fallback_error:
+                        logger.error(f"❌ Both unstructured and PyMuPDF failed to extract text from PDF {p}: {str(fallback_error)}")
+                        pdf_text = None
                 
                 # Extract images from PDF using PyMuPDF
                 pdf_temp_dir = None
@@ -721,24 +757,28 @@ class RAGPipeline:
             system_prompt = load_system_prompt()
             
             # For sentiment analysis, send the FULL text without truncation
-            # Create optimized prompt for sentiment analysis
+            # Create optimized prompt for sentiment analysis that works for ANY content
             prompt = f"""{system_prompt}
 
 ## Text for Sentiment Analysis
-Please analyze the following text for sentiment, emotional tone, and mental health indicators. Provide a comprehensive analysis.
+Please analyze the following text for sentiment, emotional tone, and emotional indicators. Provide a comprehensive sentiment analysis regardless of the topic or content type.
 
 Text to analyze:
 {query}
 
 ## Your Response
 Please provide:
-1. Main Response: A summary of the text content
+1. Main Response: A summary of the text content and its key themes
 2. Sentiment Analysis: A detailed sentiment analysis including:
-   - Overall emotional tone
-   - Key emotional indicators
-   - Mental health concerns (if any)
-   - Risk factors (if any)
-   - Recommendations (if appropriate)
+   - Overall emotional tone (Positive/Neutral/Negative)
+   - Key emotional indicators and their intensity
+   - Emotional context and nuances
+   - Notable emotional patterns or shifts
+   - Mental health indicators (if applicable to the content)
+   - Risk factors (if any concerning emotional patterns are detected)
+   - Recommendations (if appropriate and relevant)
+
+Note: Analyze sentiment for ANY type of content - whether it's depression-related, general conversation, academic text, or any other topic. The sentiment analysis should focus on the emotional tone and indicators present in the text.
 
 Format your response with "--- SENTIMENT ANALYSIS ---" separating the main response from the detailed sentiment analysis."""
             
@@ -772,27 +812,131 @@ Format your response with "--- SENTIMENT ANALYSIS ---" separating the main respo
         # Normal RAG flow (with contexts from vector DB)
         # Check for crisis situations first
         if is_crisis_query(query):
-            logger.warning("Crisis query detected - providing emergency response")
-            return {
-                "main_response": get_crisis_response(),
-                "sentiment_analysis": ""
-            }
+            logger.warning("Crisis query detected - providing emergency response with sentiment analysis")
+            
+            # Always perform sentiment analysis on crisis queries to understand emotional state
+            # This helps provide comprehensive support even in crisis situations
+            system_prompt = load_system_prompt()
+            
+            # Create a prompt that analyzes sentiment for crisis situations
+            crisis_sentiment_prompt = f"""{system_prompt}
+
+## Text for Sentiment Analysis (CRISIS SITUATION)
+Please analyze the following text for sentiment, emotional tone, and emotional indicators. This is a CRISIS SITUATION that requires immediate attention, but sentiment analysis is still important to understand the emotional state.
+
+Text to analyze:
+{query}
+
+## Your Response
+Please provide:
+1. Main Response: Acknowledgment that this is a crisis situation requiring immediate help
+2. Sentiment Analysis: A detailed and sensitive sentiment analysis including:
+   - Overall emotional tone (likely Negative/Critical)
+   - Key emotional indicators and their severity
+   - Emotional context and depth of distress
+   - Notable emotional patterns (hopelessness, despair, etc.)
+   - Risk level assessment based on emotional indicators
+   - Emotional support recommendations
+
+IMPORTANT: This is a crisis situation. The sentiment analysis should be sensitive, comprehensive, and help understand the depth of emotional distress while emphasizing the importance of immediate professional help.
+
+Format your response with "--- SENTIMENT ANALYSIS ---" separating the main response from the detailed sentiment analysis."""
+            
+            try:
+                logger.info(f"📤 Analyzing sentiment for crisis query ({len(query)} chars)")
+                resp, usage_info = self.llm.generate_content(crisis_sentiment_prompt, max_tokens=2000)
+                logger.info(f"✅ Sentiment analysis generated for crisis query - {usage_info.get('total_tokens', 0)} tokens used")
+                
+                # Parse the response
+                if "--- SENTIMENT ANALYSIS ---" in resp:
+                    parts = resp.split("--- SENTIMENT ANALYSIS ---")
+                    main_response = parts[0].strip()
+                    sentiment_analysis = parts[1].strip() if len(parts) > 1 else ""
+                else:
+                    main_response = resp
+                    sentiment_analysis = ""
+                
+                # Prepend the crisis response with emergency resources
+                crisis_msg = get_crisis_response()
+                main_response = f"{crisis_msg}\n\n{main_response}"
+                
+                return {
+                    "main_response": main_response,
+                    "sentiment_analysis": sentiment_analysis
+                }
+            except Exception as e:
+                logger.error(f"Sentiment analysis for crisis query failed: {str(e)}")
+                # Fallback to basic crisis response (still provide help even if sentiment analysis fails)
+                return {
+                    "main_response": get_crisis_response(),
+                    "sentiment_analysis": ""
+                }
         
         # Check for off-topic questions
         if is_off_topic(query):
-            logger.info("Off-topic query detected - providing redirection response")
-            off_topic_response = get_off_topic_response(query)
-            if "--- SENTIMENT ANALYSIS ---" in off_topic_response:
-                parts = off_topic_response.split("--- SENTIMENT ANALYSIS ---")
+            logger.info("Off-topic query detected - providing redirection response with sentiment analysis")
+            
+            # Always perform sentiment analysis on the actual user query, even if off-topic
+            # This ensures sentiment is analyzed for all content, not just depression-related
+            system_prompt = load_system_prompt()
+            
+            # Create a prompt that analyzes sentiment for any content (not just depression-related)
+            sentiment_prompt = f"""{system_prompt}
+
+## Text for Sentiment Analysis
+Please analyze the following text for sentiment, emotional tone, and emotional indicators. Provide a comprehensive sentiment analysis regardless of the topic.
+
+Text to analyze:
+{query}
+
+## Your Response
+Please provide:
+1. Main Response: A brief acknowledgment that this topic is outside my specialization, but I can still analyze the sentiment
+2. Sentiment Analysis: A detailed sentiment analysis including:
+   - Overall emotional tone
+   - Key emotional indicators
+   - Emotional context and nuances
+   - Any notable emotional patterns
+
+Format your response with "--- SENTIMENT ANALYSIS ---" separating the main response from the detailed sentiment analysis."""
+            
+            try:
+                logger.info(f"📤 Analyzing sentiment for off-topic query ({len(query)} chars)")
+                resp, usage_info = self.llm.generate_content(sentiment_prompt, max_tokens=2000)
+                logger.info(f"✅ Sentiment analysis generated for off-topic query - {usage_info.get('total_tokens', 0)} tokens used")
+                
+                # Parse the response
+                if "--- SENTIMENT ANALYSIS ---" in resp:
+                    parts = resp.split("--- SENTIMENT ANALYSIS ---")
+                    main_response = parts[0].strip()
+                    sentiment_analysis = parts[1].strip() if len(parts) > 1 else ""
+                else:
+                    main_response = resp
+                    sentiment_analysis = ""
+                
+                # Prepend the redirect message to the main response
+                redirect_msg = get_off_topic_response(query).split("--- SENTIMENT ANALYSIS ---")[0].strip()
+                main_response = f"{redirect_msg}\n\n{main_response}"
+                
                 return {
-                    "main_response": parts[0].strip(),
-                    "sentiment_analysis": parts[1].strip() if len(parts) > 1 else ""
+                    "main_response": main_response,
+                    "sentiment_analysis": sentiment_analysis
                 }
-            else:
-                return {
-                    "main_response": off_topic_response,
-                    "sentiment_analysis": ""
-                }
+            except Exception as e:
+                logger.error(f"Sentiment analysis for off-topic query failed: {str(e)}")
+                # Fallback to basic response
+                off_topic_response = get_off_topic_response(query)
+                if "--- SENTIMENT ANALYSIS ---" in off_topic_response:
+                    parts = off_topic_response.split("--- SENTIMENT ANALYSIS ---")
+                    return {
+                        "main_response": parts[0].strip(),
+                        "sentiment_analysis": parts[1].strip() if len(parts) > 1 else ""
+                    }
+                else:
+                    return {
+                        "main_response": off_topic_response,
+                        "sentiment_analysis": ""
+                    }
         
         logger.info("Generating answer using OpenAI for depression-related query")
         
