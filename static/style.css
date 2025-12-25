@@ -470,6 +470,52 @@ body {
     border: 1px solid rgba(78, 205, 196, 0.2);
 }
 
+/* Formatted Sentiment Content Styles */
+.sentiment-content {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.sentiment-section-header {
+    color: #4ecdc4;
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid rgba(78, 205, 196, 0.3);
+}
+
+.sentiment-section-header:first-child {
+    margin-top: 0;
+}
+
+.sentiment-paragraph {
+    margin-bottom: 0.75rem;
+}
+
+.sentiment-bullet {
+    padding-left: 1.25rem;
+    position: relative;
+    margin: 0.35rem 0;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.sentiment-bullet::before {
+    content: "•";
+    position: absolute;
+    left: 0.25rem;
+    color: #4ecdc4;
+    font-weight: bold;
+}
+
+.sentiment-content strong {
+    color: #4ecdc4;
+    font-weight: 600;
+}
+
 .sentiment-analysis i {
     color: #4ecdc4;
     font-size: 1.1rem;
@@ -554,6 +600,48 @@ body {
 
 .audio-transcript .caption-header h4::before {
     content: "🎤";
+    font-size: 1rem;
+}
+
+/* Text Content Message Styles */
+.message.text-content .message-content {
+    background: rgba(138, 43, 226, 0.15);
+    border: 1px solid rgba(138, 43, 226, 0.3);
+    border-left: 4px solid #8a2be2;
+}
+
+.text-content i {
+    color: #8a2be2;
+    font-size: 1.1rem;
+}
+
+.text-content .caption-header h4 {
+    color: #8a2be2;
+}
+
+.text-content .caption-header h4::before {
+    content: "📄";
+    font-size: 1rem;
+}
+
+/* PDF Text Message Styles */
+.message.pdf-text .message-content {
+    background: rgba(255, 99, 71, 0.15);
+    border: 1px solid rgba(255, 99, 71, 0.3);
+    border-left: 4px solid #ff6347;
+}
+
+.pdf-text i {
+    color: #ff6347;
+    font-size: 1.1rem;
+}
+
+.pdf-text .caption-header h4 {
+    color: #ff6347;
+}
+
+.pdf-text .caption-header h4::before {
+    content: "📕";
     font-size: 1rem;
 }
 

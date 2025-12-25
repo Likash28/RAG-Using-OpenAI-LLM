@@ -58,9 +58,9 @@ class RAGPipeline:
         return None
 
     # --------------- Ingest ---------------
-    def _process_single_file(self, p: str) -> Tuple[List[Chunk], List[Dict[str, Any]], List[Tuple[str, str, float]], Dict[str, str], str, Dict[str, str], str]:
-        """Process a single file and return chunks, image data, facts, image captions, audio transcript, OCR texts, and PDF text.
-        Returns: (chunks, image_data_list, facts, image_captions, audio_transcript, ocr_texts, pdf_text)
+    def _process_single_file(self, p: str) -> Tuple[List[Chunk], List[Dict[str, Any]], List[Tuple[str, str, float]], Dict[str, str], str, Dict[str, str], str, str]:
+        """Process a single file and return chunks, image data, facts, image captions, audio transcript, OCR texts, PDF text, and text content.
+        Returns: (chunks, image_data_list, facts, image_captions, audio_transcript, ocr_texts, pdf_text, text_content)
         - chunks: List of text chunks
         - image_data_list: List of Dict with 'id', 'meta', 'emb' for each image (empty list if no images)
         - facts: List of numeric facts
@@ -68,6 +68,7 @@ class RAGPipeline:
         - audio_transcript: Transcript text if audio file, else None
         - ocr_texts: Dict mapping image_id to OCR extracted text
         - pdf_text: Full extracted text from PDF if PDF file, else None
+        - text_content: Full extracted text from text files (.txt) if text file, else None
         """
         ext = Path(p).suffix.lower().lstrip(".")
         source_id = os.path.basename(p)
@@ -78,6 +79,7 @@ class RAGPipeline:
         audio_transcript = None
         ocr_texts = {}  # Changed to dict to handle multiple OCR texts
         pdf_text = None  # Full text extracted from PDF for sentiment analysis
+        text_content = None  # Full text extracted from text files (.txt) for sentiment analysis
 
         logger.info(f"🚀 Processing file: {source_id} ({ext})")
 
@@ -436,9 +438,31 @@ class RAGPipeline:
                 # Text files - Direct text extraction, NO BLIP needed
                 logger.info(f"📄 Processing text file: {source_id} (direct extraction, no BLIP)")
                 elements = partition_any(p)
+
+                # Extract full text for sentiment analysis (similar to PDF and audio)
+                full_text_parts = []
+                for el in elements:
+                    try:
+                        text = el.text if hasattr(el, 'text') else str(el)
+                        if text and text.strip():
+                            full_text_parts.append(text.strip())
+                    except Exception as e:
+                        logger.debug(f"Error extracting text from element: {e}")
+                        continue
+
+                # Combine all text into one string for sentiment analysis
+                if full_text_parts:
+                    text_content = "\n\n".join(full_text_parts)
+                    logger.info(f"✅ Extracted {len(text_content)} characters of text from file for sentiment analysis")
+                    logger.info(f"Text content preview: {text_content[:200]}...")
+                else:
+                    logger.warning(f"⚠️ No text extracted from file {source_id}")
+                    text_content = None
+
+                # Create chunks for vector DB storage (for RAG queries)
                 chunks = elements_to_text_chunks(elements, source=source_id)
                 if chunks:
-                    logger.info(f"✅ Text file processed: {len(chunks)} chunk(s) extracted directly")
+                    logger.info(f"✅ Text file processed: {len(chunks)} chunk(s) extracted for vector DB storage")
                 else:
                     logger.warning(f"⚠️ No text chunks extracted from {source_id}")
 
@@ -472,9 +496,11 @@ class RAGPipeline:
                 ocr_texts = {}
             if pdf_text is None:
                 pdf_text = None
-        
-        logger.info(f"🔚 Returning from _process_single_file for {source_id}: {len(chunks)} chunks, {len(image_data_list)} images, {len(facts)} facts, {len(image_captions)} captions, audio_transcript={'present' if audio_transcript else 'None'}, {len(ocr_texts)} OCR texts, pdf_text={'present' if pdf_text else 'None'}")
-        return chunks, image_data_list, facts, image_captions, audio_transcript, ocr_texts, pdf_text
+            if text_content is None:
+                text_content = None
+
+        logger.info(f"🔚 Returning from _process_single_file for {source_id}: {len(chunks)} chunks, {len(image_data_list)} images, {len(facts)} facts, {len(image_captions)} captions, audio_transcript={'present' if audio_transcript else 'None'}, {len(ocr_texts)} OCR texts, pdf_text={'present' if pdf_text else 'None'}, text_content={'present' if text_content else 'None'}")
+        return chunks, image_data_list, facts, image_captions, audio_transcript, ocr_texts, pdf_text, text_content
 
     def ingest_paths(self, paths: List[str]) -> Dict[str, Any]:
         logger.info(f"Starting parallel ingestion of {len(paths)} files")
@@ -490,6 +516,7 @@ class RAGPipeline:
         audio_transcripts = {}  # Store audio transcripts for return
         ocr_texts = {}  # Store OCR texts for return
         pdf_texts = {}  # Store PDF texts for return (for sentiment analysis)
+        text_contents = {}  # Store text file contents for return (for sentiment analysis)
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all files for processing
@@ -507,8 +534,8 @@ class RAGPipeline:
                 logger.info(f"⏳ Waiting for result from {os.path.basename(p)}...")
                 try:
                     # Get result with timeout
-                    chunks, image_data_list, facts, file_image_captions, audio_transcript, file_ocr_texts, pdf_text = future.result(timeout=max_file_time)
-                    logger.info(f"✅ Got result from {os.path.basename(p)}: {len(chunks)} chunks, {len(image_data_list)} images, audio_transcript={'present' if audio_transcript else 'None'}, {len(file_ocr_texts)} OCR texts, pdf_text={'present' if pdf_text else 'None'}")
+                    chunks, image_data_list, facts, file_image_captions, audio_transcript, file_ocr_texts, pdf_text, text_content = future.result(timeout=max_file_time)
+                    logger.info(f"✅ Got result from {os.path.basename(p)}: {len(chunks)} chunks, {len(image_data_list)} images, audio_transcript={'present' if audio_transcript else 'None'}, {len(file_ocr_texts)} OCR texts, pdf_text={'present' if pdf_text else 'None'}, text_content={'present' if text_content else 'None'}")
                     
                     # Collect chunks for batch embedding later
                     if chunks:
@@ -549,7 +576,13 @@ class RAGPipeline:
                         source_id = os.path.basename(p)
                         pdf_texts[source_id] = pdf_text
                         logger.info(f"✅ Stored PDF text from {source_id} ({len(pdf_text)} chars) for sentiment analysis")
-                    
+
+                    # Store text file content for sentiment analysis (similar to audio transcripts and PDF)
+                    if text_content:
+                        source_id = os.path.basename(p)
+                        text_contents[source_id] = text_content
+                        logger.info(f"✅ Stored text content from {source_id} ({len(text_content)} chars) for sentiment analysis")
+
                     elapsed = time.time() - file_start
                     logger.info(f"✅ Completed processing: {os.path.basename(p)} (took {elapsed:.2f}s)")
                     
@@ -573,6 +606,7 @@ class RAGPipeline:
         logger.info(f"📊 Audio transcripts ready: {list(audio_transcripts.keys())} with {sum(1 for t in audio_transcripts.values() if t)} non-empty")
         logger.info(f"📊 OCR texts ready: {list(ocr_texts.keys())} with {sum(1 for t in ocr_texts.values() if t)} non-empty")
         logger.info(f"📊 PDF texts ready: {list(pdf_texts.keys())} with {sum(1 for t in pdf_texts.values() if t)} non-empty")
+        logger.info(f"📊 Text contents ready: {list(text_contents.keys())} with {sum(1 for t in text_contents.values() if t)} non-empty")
         
         # Batch embed all text chunks at once (OPTIMIZED for speed)
         # NOTE: Audio transcripts are NOT included here - they skip vector DB storage
@@ -675,9 +709,10 @@ class RAGPipeline:
             "image_captions": image_captions_by_filename,  # Keyed by filename for app.py compatibility
             "audio_transcripts": audio_transcripts,
             "ocr_texts": ocr_texts_by_filename,  # Keyed by filename for app.py compatibility
-            "pdf_texts": pdf_texts  # Keyed by filename for sentiment analysis
+            "pdf_texts": pdf_texts,  # Keyed by filename for sentiment analysis
+            "text_contents": text_contents  # Keyed by filename for sentiment analysis (text files)
         }
-        logger.info(f"📤 Returning result - Transcripts and PDF texts ready for sentiment analysis")
+        logger.info(f"📤 Returning result - Transcripts, PDF texts, and text contents ready for sentiment analysis")
         return result
 
     # --------------- Retrieve ---------------
@@ -734,6 +769,86 @@ class RAGPipeline:
         return {"results": ranked}
 
     # --------------- Generate ---------------
+    def _generate_sentiment_analysis(self, query: str, context: str = "") -> str:
+        """
+        Helper function to always generate sentiment analysis for any query.
+        This ensures sentiment analysis is ALWAYS provided, even if the main response doesn't include it.
+
+        IMPORTANT: This uses a SEPARATE prompt that is NOT restricted to depression topics.
+        This allows sentiment analysis for ANY content type (images, audio, PDFs, text files, etc.)
+
+        Args:
+            query: The user query to analyze
+            context: Optional context about the query type or situation
+
+        Returns:
+            Sentiment analysis string, or empty string if generation fails
+        """
+        if self.llm is None:
+            return ""
+
+        try:
+            context_note = f"\n\nContext: {context}" if context else ""
+
+            # Use a SEPARATE sentiment-only prompt that is NOT restricted to depression topics
+            # This ensures sentiment analysis works for ALL content types
+            sentiment_prompt = f"""You are a sentiment analysis expert. Your task is to analyze the emotional tone and sentiment of ANY text provided to you.
+
+IMPORTANT: You must analyze the sentiment of ALL content types - including:
+- Image descriptions and captions
+- Audio transcriptions
+- PDF document text
+- Text file content
+- Technical documents
+- Any other text content
+
+Do NOT refuse to analyze based on topic. Your job is to identify emotional indicators in ANY text.
+
+## Text for Sentiment Analysis
+{query}{context_note}
+
+## Your Response
+Provide a detailed sentiment analysis including:
+
+**Overall Sentiment Classification:** [Positive/Neutral/Negative]
+
+**Key Emotional Indicators:**
+- List the emotional words, phrases, or themes detected
+- Rate their intensity (mild/moderate/strong)
+
+**Emotional Context and Nuances:**
+- Describe the overall emotional atmosphere of the text
+- Note any subtle emotional undertones
+
+**Notable Emotional Patterns or Shifts:**
+- Identify any changes in emotional tone throughout the text
+- Note consistency or variability in sentiment
+
+**Content Type Assessment:**
+- Identify what type of content this appears to be
+- Note any domain-specific emotional indicators
+
+**Mental Health Indicators (if applicable):**
+- Only include if the content relates to mental health or wellbeing
+- Note: Technical/neutral content may have no mental health indicators
+
+**Risk Factors:**
+- Note any concerning patterns if present
+- For neutral/technical content, state "No risk factors identified"
+
+**Summary:**
+- Provide a brief 1-2 sentence summary of the overall sentiment
+
+Provide ONLY the sentiment analysis above. Do not include any refusals or topic restrictions."""
+
+            logger.info(f"📤 Generating sentiment analysis for query ({len(query)} chars)")
+            resp, usage_info = self.llm.generate_content(sentiment_prompt, max_tokens=1500)
+            logger.info(f"✅ Sentiment analysis generated - {usage_info.get('total_tokens', 0)} tokens used")
+            return resp.strip()
+        except Exception as e:
+            logger.error(f"Failed to generate sentiment analysis: {str(e)}")
+            return ""
+    
     def answer(self, query: str, contexts: List[Dict[str, Any]], is_sentiment_analysis: bool = False) -> Dict[str, str]:
         """
         Generate answer from query and contexts.
@@ -744,43 +859,72 @@ class RAGPipeline:
             is_sentiment_analysis: If True, this is a direct sentiment analysis query (skip retrieval was used)
         """
         if self.llm is None:
+            # Even without LLM, try to provide basic sentiment indication
             return {
                 "main_response": "LLM not configured. Please set up your API key in the .env file to enable question answering.",
-                "sentiment_analysis": ""
+                "sentiment_analysis": "Unable to generate sentiment analysis: LLM not configured."
             }
         
         # For direct sentiment analysis (skip_retrieval=True), use optimized prompt
         if is_sentiment_analysis:
             logger.info(f"⚡ Direct sentiment analysis mode - processing {len(query)} characters of text")
-            
-            # Load system prompt
-            system_prompt = load_system_prompt()
-            
-            # For sentiment analysis, send the FULL text without truncation
-            # Create optimized prompt for sentiment analysis that works for ANY content
-            prompt = f"""{system_prompt}
 
-## Text for Sentiment Analysis
-Please analyze the following text for sentiment, emotional tone, and emotional indicators. Provide a comprehensive sentiment analysis regardless of the topic or content type.
+            # For sentiment analysis, use a prompt that works for ANY content type
+            # DO NOT use the depression-focused system prompt here
+            prompt = f"""You are a content analysis and sentiment expert. Your task is to analyze ANY text provided to you.
 
-Text to analyze:
+IMPORTANT: You must analyze ALL content types without refusing. This includes:
+- Image descriptions and captions
+- Audio transcriptions
+- PDF document text
+- Text file content
+- Technical documents
+- Any other text content
+
+## Text to Analyze
 {query}
 
 ## Your Response
-Please provide:
-1. Main Response: A summary of the text content and its key themes
-2. Sentiment Analysis: A detailed sentiment analysis including:
-   - Overall emotional tone (Positive/Neutral/Negative)
-   - Key emotional indicators and their intensity
-   - Emotional context and nuances
-   - Notable emotional patterns or shifts
-   - Mental health indicators (if applicable to the content)
-   - Risk factors (if any concerning emotional patterns are detected)
-   - Recommendations (if appropriate and relevant)
+Please provide TWO sections:
 
-Note: Analyze sentiment for ANY type of content - whether it's depression-related, general conversation, academic text, or any other topic. The sentiment analysis should focus on the emotional tone and indicators present in the text.
+### MAIN RESPONSE
+Provide a brief summary (2-3 sentences) of what this text is about. Identify:
+- The type of content (image caption, document, transcript, etc.)
+- Key themes or topics mentioned
+- The overall context or purpose of the text
 
-Format your response with "--- SENTIMENT ANALYSIS ---" separating the main response from the detailed sentiment analysis."""
+--- SENTIMENT ANALYSIS ---
+
+**Overall Sentiment Classification:** [Positive/Neutral/Negative]
+
+**Key Emotional Indicators:**
+- List emotional words, phrases, or themes detected
+- Rate their intensity (mild/moderate/strong)
+
+**Emotional Context and Nuances:**
+- Describe the overall emotional atmosphere
+- Note any subtle undertones
+
+**Notable Emotional Patterns or Shifts:**
+- Identify any changes in emotional tone
+- Note consistency or variability
+
+**Content Type Assessment:**
+- What type of content is this?
+- Any domain-specific emotional indicators?
+
+**Mental Health Indicators (if applicable):**
+- Only include if content relates to mental health/wellbeing
+- For neutral/technical content: "Not applicable - neutral content"
+
+**Risk Factors:**
+- Note concerning patterns if present
+- For neutral content: "No risk factors identified"
+
+**Summary:**
+Brief 1-2 sentence sentiment summary.
+
+IMPORTANT: Always provide BOTH the main response AND the sentiment analysis. Never refuse based on topic."""
             
             logger.info(f"📤 Sending full text ({len(query)} chars) to LLM for sentiment analysis")
             
@@ -798,15 +942,22 @@ Format your response with "--- SENTIMENT ANALYSIS ---" separating the main respo
                     main_response = resp
                     sentiment_analysis = ""
                 
+                # ALWAYS ensure sentiment analysis is present - generate if missing
+                if not sentiment_analysis or not sentiment_analysis.strip():
+                    logger.info("⚠️ Sentiment analysis missing from response, generating separately...")
+                    sentiment_analysis = self._generate_sentiment_analysis(query, "Direct sentiment analysis mode")
+                
                 return {
                     "main_response": main_response,
                     "sentiment_analysis": sentiment_analysis
                 }
             except Exception as e:
                 logger.error(f"Sentiment analysis generation failed: {str(e)}")
+                # Even on error, try to generate sentiment analysis
+                sentiment_analysis = self._generate_sentiment_analysis(query, "Error recovery - direct sentiment analysis")
                 return {
                     "main_response": f"Sorry, I encountered an error while generating the sentiment analysis: {str(e)}",
-                    "sentiment_analysis": ""
+                    "sentiment_analysis": sentiment_analysis if sentiment_analysis else "Unable to generate sentiment analysis due to error."
                 }
         
         # Normal RAG flow (with contexts from vector DB)
@@ -856,6 +1007,11 @@ Format your response with "--- SENTIMENT ANALYSIS ---" separating the main respo
                     main_response = resp
                     sentiment_analysis = ""
                 
+                # ALWAYS ensure sentiment analysis is present for crisis queries
+                if not sentiment_analysis or not sentiment_analysis.strip():
+                    logger.info("⚠️ Sentiment analysis missing from crisis response, generating separately...")
+                    sentiment_analysis = self._generate_sentiment_analysis(query, "Crisis situation - high priority")
+                
                 # Prepend the crisis response with emergency resources
                 crisis_msg = get_crisis_response()
                 main_response = f"{crisis_msg}\n\n{main_response}"
@@ -866,10 +1022,11 @@ Format your response with "--- SENTIMENT ANALYSIS ---" separating the main respo
                 }
             except Exception as e:
                 logger.error(f"Sentiment analysis for crisis query failed: {str(e)}")
-                # Fallback to basic crisis response (still provide help even if sentiment analysis fails)
+                # Even on error, try to generate sentiment analysis for crisis queries
+                sentiment_analysis = self._generate_sentiment_analysis(query, "Crisis situation - error recovery")
                 return {
                     "main_response": get_crisis_response(),
-                    "sentiment_analysis": ""
+                    "sentiment_analysis": sentiment_analysis if sentiment_analysis else "Unable to generate sentiment analysis. This is a crisis situation - please seek immediate professional help."
                 }
         
         # Check for off-topic questions
@@ -914,6 +1071,11 @@ Format your response with "--- SENTIMENT ANALYSIS ---" separating the main respo
                     main_response = resp
                     sentiment_analysis = ""
                 
+                # ALWAYS ensure sentiment analysis is present for off-topic queries
+                if not sentiment_analysis or not sentiment_analysis.strip():
+                    logger.info("⚠️ Sentiment analysis missing from off-topic response, generating separately...")
+                    sentiment_analysis = self._generate_sentiment_analysis(query, "Off-topic query")
+                
                 # Prepend the redirect message to the main response
                 redirect_msg = get_off_topic_response(query).split("--- SENTIMENT ANALYSIS ---")[0].strip()
                 main_response = f"{redirect_msg}\n\n{main_response}"
@@ -924,18 +1086,21 @@ Format your response with "--- SENTIMENT ANALYSIS ---" separating the main respo
                 }
             except Exception as e:
                 logger.error(f"Sentiment analysis for off-topic query failed: {str(e)}")
+                # Even on error, try to generate sentiment analysis
+                sentiment_analysis = self._generate_sentiment_analysis(query, "Off-topic query - error recovery")
                 # Fallback to basic response
                 off_topic_response = get_off_topic_response(query)
                 if "--- SENTIMENT ANALYSIS ---" in off_topic_response:
                     parts = off_topic_response.split("--- SENTIMENT ANALYSIS ---")
+                    fallback_sentiment = parts[1].strip() if len(parts) > 1 else ""
                     return {
                         "main_response": parts[0].strip(),
-                        "sentiment_analysis": parts[1].strip() if len(parts) > 1 else ""
+                        "sentiment_analysis": sentiment_analysis if sentiment_analysis else fallback_sentiment
                     }
                 else:
                     return {
                         "main_response": off_topic_response,
-                        "sentiment_analysis": ""
+                        "sentiment_analysis": sentiment_analysis if sentiment_analysis else "Unable to generate sentiment analysis for this query."
                     }
         
         logger.info("Generating answer using OpenAI for depression-related query")
@@ -1009,15 +1174,22 @@ Please respond according to the protocols outlined above:"""
                 main_response = resp
                 sentiment_analysis = ""
             
+            # ALWAYS ensure sentiment analysis is present - generate if missing
+            if not sentiment_analysis or not sentiment_analysis.strip():
+                logger.info("⚠️ Sentiment analysis missing from RAG response, generating separately...")
+                sentiment_analysis = self._generate_sentiment_analysis(query, "Depression-related query with RAG context")
+            
             return {
                 "main_response": main_response,
                 "sentiment_analysis": sentiment_analysis
             }
         except Exception as e:
             logger.error(f"Answer generation failed: {str(e)}")
+            # Even on error, try to generate sentiment analysis
+            sentiment_analysis = self._generate_sentiment_analysis(query, "Error recovery - depression-related query")
             return {
                 "main_response": f"Sorry, I encountered an error while generating the answer: {str(e)}",
-                "sentiment_analysis": ""
+                "sentiment_analysis": sentiment_analysis if sentiment_analysis else "Unable to generate sentiment analysis due to error."
             }
 
     def query(self, query: str, k: int, skip_retrieval: bool = False) -> Dict[str, Any]:

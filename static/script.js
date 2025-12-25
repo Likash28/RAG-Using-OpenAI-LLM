@@ -248,24 +248,27 @@ async function submitFiles() {
             console.log('Files in result:', result.files);
             
             // Categorize all files properly
-            const imageFiles = (result.files || []).filter(f => f.is_image);
-            const audioFiles = (result.files || []).filter(f => f.is_audio);
-            const pdfFiles = (result.files || []).filter(f => f.is_pdf);
-            const textFiles = (result.files || []).filter(f => !f.is_image && !f.is_audio && !f.is_pdf);
-            
+            // Check both the flag AND the content to be more robust
+            const imageFiles = (result.files || []).filter(f => f.is_image || f.blip_caption || f.ocr_text);
+            const audioFiles = (result.files || []).filter(f => f.is_audio || f.audio_transcript);
+            const pdfFiles = (result.files || []).filter(f => f.is_pdf || f.pdf_text);
+            const textFiles = (result.files || []).filter(f => f.is_text || f.text_content);
+
+            console.log('=== FILE CATEGORIZATION ===');
+            console.log('All files received:', JSON.stringify(result.files, null, 2));
             console.log(`Found ${imageFiles.length} image file(s), ${audioFiles.length} audio file(s), ${pdfFiles.length} PDF file(s), ${textFiles.length} text file(s)`);
             
             // Collect all files that need automatic queries
             const filesToQuery = [];
             
-            // Process image files
+            // Process image files - MANDATORY sentiment analysis for ALL images
             imageFiles.forEach((file) => {
                 // Always display BLIP caption if available
                 if (file.blip_caption) {
                     displayImageCaption(file.filename, file.blip_caption);
                 }
                 
-                // Display OCR text if available (text > 200 chars was found)
+                // Display OCR text if available
                 if (file.ocr_text) {
                     displayOCRText(file.filename, file.ocr_text);
                     // Priority: Use OCR text for sentiment analysis
@@ -276,93 +279,176 @@ async function submitFiles() {
                         displayName: `OCR text from ${file.filename}`
                     });
                 } else if (file.blip_caption) {
-                    // No OCR text, use BLIP caption for query
+                    // No OCR text, use BLIP caption for sentiment analysis
                     filesToQuery.push({
                         filename: file.filename,
                         query: file.blip_caption,
                         type: 'image_blip',
                         displayName: `BLIP caption from ${file.filename}`
                     });
+                } else if (file.sentiment_fallback) {
+                    // No OCR or BLIP, use fallback text for sentiment analysis (MANDATORY)
+                    console.log(`⚠️ Using fallback text for image ${file.filename} - sentiment analysis will still be performed`);
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.sentiment_fallback,
+                        type: 'image_fallback',
+                        displayName: `Image content from ${file.filename}`
+                    });
+                } else {
+                    // Last resort: use filename for sentiment analysis
+                    console.log(`⚠️ No text available for image ${file.filename}, using filename for sentiment analysis`);
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: `Image file: ${file.filename}. Visual content uploaded.`,
+                        type: 'image_fallback',
+                        displayName: `Image content from ${file.filename}`
+                    });
                 }
             });
             
-            // Process audio files
+            // Process audio files - MANDATORY sentiment analysis for ALL audio files
             audioFiles.forEach((file) => {
                 console.log(`Processing audio file: ${file.filename}, transcript length: ${file.audio_transcript ? file.audio_transcript.length : 0}`);
                 
-                if (!file.audio_transcript || file.audio_transcript.trim().length === 0) {
-                    console.warn(`⚠️ No transcript found for ${file.filename}`);
-                    return;
+                if (file.audio_transcript && file.audio_transcript.trim().length > 0) {
+                    displayAudioTranscript(file.filename, file.audio_transcript);
+                    
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.audio_transcript.trim(),
+                        type: 'audio',
+                        displayName: `Audio transcript from ${file.filename}`
+                    });
+                } else if (file.sentiment_fallback) {
+                    // No transcript, use fallback text for sentiment analysis (MANDATORY)
+                    console.warn(`⚠️ No transcript found for ${file.filename}, using fallback text for sentiment analysis`);
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.sentiment_fallback,
+                        type: 'audio_fallback',
+                        displayName: `Audio content from ${file.filename}`
+                    });
+                } else {
+                    // Last resort: use filename for sentiment analysis
+                    console.warn(`⚠️ No transcript or fallback for ${file.filename}, using filename for sentiment analysis`);
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: `Audio file: ${file.filename}. Audio content uploaded.`,
+                        type: 'audio_fallback',
+                        displayName: `Audio content from ${file.filename}`
+                    });
                 }
-                
-                displayAudioTranscript(file.filename, file.audio_transcript);
-                
-                filesToQuery.push({
-                    filename: file.filename,
-                    query: file.audio_transcript.trim(),
-                    type: 'audio',
-                    displayName: `Audio transcript from ${file.filename}`
-                });
             });
             
-            // Process PDF files - extract text and send for sentiment analysis
+            // Process PDF files - MANDATORY sentiment analysis for ALL PDFs
             pdfFiles.forEach((file) => {
                 console.log(`Processing PDF file: ${file.filename}, text length: ${file.pdf_text ? file.pdf_text.length : 0}`);
-                
-                if (!file.pdf_text || file.pdf_text.trim().length === 0) {
-                    console.warn(`⚠️ No text found for PDF ${file.filename}`);
-                    return;
+
+                if (file.pdf_text && file.pdf_text.trim().length > 0) {
+                    // Display PDF text (similar to audio transcript)
+                    displayPDFText(file.filename, file.pdf_text);
+
+                    // Send PDF text for sentiment analysis (similar to audio transcripts)
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.pdf_text.trim(),
+                        type: 'pdf',
+                        displayName: `PDF text from ${file.filename}`
+                    });
+                } else if (file.sentiment_fallback) {
+                    // No text extracted, use fallback text for sentiment analysis (MANDATORY)
+                    console.warn(`⚠️ No text found for PDF ${file.filename}, using fallback text for sentiment analysis`);
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.sentiment_fallback,
+                        type: 'pdf_fallback',
+                        displayName: `PDF content from ${file.filename}`
+                    });
+                } else {
+                    // Last resort: use filename for sentiment analysis
+                    console.warn(`⚠️ No text or fallback for PDF ${file.filename}, using filename for sentiment analysis`);
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: `PDF document: ${file.filename}. Document uploaded.`,
+                        type: 'pdf_fallback',
+                        displayName: `PDF content from ${file.filename}`
+                    });
                 }
-                
-                // Display PDF text (similar to audio transcript)
-                displayPDFText(file.filename, file.pdf_text);
-                
-                // Send PDF text for sentiment analysis (similar to audio transcripts)
-                filesToQuery.push({
-                    filename: file.filename,
-                    query: file.pdf_text.trim(),
-                    type: 'pdf',
-                    displayName: `PDF text from ${file.filename}`
-                });
+            });
+
+            // Process text files - MANDATORY sentiment analysis for ALL text files
+            textFiles.forEach((file) => {
+                console.log(`Processing text file: ${file.filename}, content length: ${file.text_content ? file.text_content.length : 0}`);
+
+                if (file.text_content && file.text_content.trim().length > 0) {
+                    // Display text content (similar to PDF text and audio transcript)
+                    displayTextContent(file.filename, file.text_content);
+
+                    // Send text content for sentiment analysis
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.text_content.trim(),
+                        type: 'text',
+                        displayName: `Text content from ${file.filename}`
+                    });
+                } else if (file.sentiment_fallback) {
+                    // No content extracted, use fallback text for sentiment analysis (MANDATORY)
+                    console.warn(`⚠️ No content found for text file ${file.filename}, using fallback text for sentiment analysis`);
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: file.sentiment_fallback,
+                        type: 'text_fallback',
+                        displayName: `Text content from ${file.filename}`
+                    });
+                } else {
+                    // Last resort: use filename for sentiment analysis
+                    console.warn(`⚠️ No content or fallback for text file ${file.filename}, using filename for sentiment analysis`);
+                    filesToQuery.push({
+                        filename: file.filename,
+                        query: `Text file: ${file.filename}. Text document uploaded.`,
+                        type: 'text_fallback',
+                        displayName: `Text content from ${file.filename}`
+                    });
+                }
             });
             
             // Show success message
+            console.log('=== FILES TO QUERY ===');
+            console.log(`Total files to query: ${filesToQuery.length}`);
+            filesToQuery.forEach((fq, i) => {
+                console.log(`  ${i+1}. ${fq.filename} (${fq.type}): ${fq.query.substring(0, 50)}...`);
+            });
+
             if (filesToQuery.length > 0 || imageFiles.length > 0 || audioFiles.length > 0 || pdfFiles.length > 0 || textFiles.length > 0) {
-                addMessage('assistant', `✅ Successfully processed ${result.ingested.length} file(s)!`);
-                
+                addMessage('assistant', `✅ Successfully processed ${result.ingested.length} file(s)! Scheduling ${filesToQuery.length} automatic sentiment analysis queries...`);
+
                 // Process all queries sequentially with minimal delays for faster response
                 // Reduced delay for better user experience while still avoiding API rate limits
                 let queryDelay = 500; // Start with 0.5 second delay (reduced from 1s)
                 const delayIncrement = 1000; // 1 second between each query (reduced from 2s)
                 
                 filesToQuery.forEach((fileQuery, index) => {
+                    const delay = queryDelay + (index * delayIncrement);
+                    console.log(`⏱️ Scheduling query ${index + 1}/${filesToQuery.length} for ${fileQuery.filename} in ${delay}ms`);
+
                     setTimeout(() => {
                         console.log(`🚀 Auto-querying LLM with ${fileQuery.type} from ${fileQuery.filename}:`, fileQuery.query.substring(0, 100) + (fileQuery.query.length > 100 ? '...' : ''));
                         console.log(`📝 Full ${fileQuery.type} length: ${fileQuery.query.length} characters`);
-                        
-                        // For audio transcripts and PDF text, show full text in user message
-                        if (fileQuery.type === 'audio' || fileQuery.type === 'pdf') {
-                            // Show full text for audio/PDF (it's already displayed above)
-                            const displayQuery = fileQuery.query.length > 500 
-                                ? fileQuery.query.substring(0, 500) + `\n\n... (${fileQuery.query.length - 500} more characters - full text sent for sentiment analysis)`
-                                : fileQuery.query;
-                            addMessage('user', `[${fileQuery.displayName}]\n${displayQuery}`);
-                        } else {
-                            // For images, show truncated version
-                            const displayQuery = fileQuery.query.length > 200 
-                                ? fileQuery.query.substring(0, 200) + '...' 
-                                : fileQuery.query;
-                            addMessage('user', `[${fileQuery.displayName}]\n${displayQuery}`);
-                        }
-                        
+                        console.log(`📊 Current isProcessing state: ${isProcessing}`);
+
+                        // Show analysis message for the file being processed
+                        addMessage('user', `[Analyzing ${fileQuery.displayName}]`);
+
                         // Query LLM with the full text for sentiment analysis
+                        console.log(`📤 Calling queryLLM for ${fileQuery.filename}...`);
                         queryLLM(fileQuery.query, false).then(() => {
                             console.log(`✅ Successfully processed automatic query for ${fileQuery.filename} (${fileQuery.type})`);
                         }).catch(err => {
                             console.error(`❌ Error in automatic query for ${fileQuery.filename} (${fileQuery.type}):`, err);
                             addMessage('assistant', `Error processing ${fileQuery.type} from ${fileQuery.filename}: ${err.message}`);
                         });
-                    }, queryDelay + (index * delayIncrement));
+                    }, delay);
                 });
                 
                 // If no automatic queries but files were processed, show message
@@ -493,15 +579,15 @@ function displayOCRText(filename, ocrText) {
 function displayPDFText(filename, pdfText) {
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message assistant pdf-text';
-    
+
     const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-    
+
     // Show full PDF text with scrollable container for long text
     const isLongText = pdfText.length > 500;
-    const displayText = isLongText 
+    const displayText = isLongText
         ? `<div style="max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">${pdfText}</div>`
         : `<p style="white-space: pre-wrap; word-wrap: break-word;">${pdfText}</p>`;
-    
+
     messageDiv.innerHTML = `
         <div class="message-content">
             <i class="fas fa-file-pdf"></i>
@@ -518,7 +604,40 @@ function displayPDFText(filename, pdfText) {
             <div class="message-time">${time}</div>
         </div>
     `;
-    
+
+    messages.appendChild(messageDiv);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function displayTextContent(filename, textContent) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message assistant text-content';
+
+    const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+    // Show full text content with scrollable container for long text
+    const isLongText = textContent.length > 500;
+    const displayText = isLongText
+        ? `<div style="max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">${textContent}</div>`
+        : `<p style="white-space: pre-wrap; word-wrap: break-word;">${textContent}</p>`;
+
+    messageDiv.innerHTML = `
+        <div class="message-content">
+            <i class="fas fa-file-alt"></i>
+            <div class="caption-header">
+                <h4>Text File Content Extracted</h4>
+                <span class="caption-filename">${filename}</span>
+                <span style="font-size: 0.8em; color: #888; margin-left: 10px;">(${textContent.length} characters)</span>
+            </div>
+            <div class="caption-content">
+                <p><strong>Full Text Content:</strong></p>
+                ${displayText}
+                <p style="margin-top: 10px; font-size: 0.9em; color: #888;"><em>This text will be sent for sentiment analysis...</em></p>
+            </div>
+            <div class="message-time">${time}</div>
+        </div>
+    `;
+
     messages.appendChild(messageDiv);
     messages.scrollTop = messages.scrollHeight;
 }
@@ -608,9 +727,16 @@ async function queryLLM(query, showUserMessage = true) {
             }
             
             // Display sentiment analysis if available
+            console.log(`📊 Checking sentiment_analysis:`, {
+                exists: !!result.sentiment_analysis,
+                length: result.sentiment_analysis ? result.sentiment_analysis.length : 0,
+                preview: result.sentiment_analysis ? result.sentiment_analysis.substring(0, 100) : 'N/A'
+            });
             if (result.sentiment_analysis && result.sentiment_analysis.trim()) {
-                console.log(`📊 Displaying sentiment analysis`);
+                console.log(`📊 Displaying sentiment analysis (${result.sentiment_analysis.length} chars)`);
                 addSentimentAnalysis(result.sentiment_analysis);
+            } else {
+                console.warn('⚠️ No sentiment_analysis in result or empty');
             }
             
             // Sources display removed - not showing in UI
@@ -647,12 +773,35 @@ async function sendMessage() {
 }
 
 
+// Convert markdown-style text to clean HTML for better display
+function formatSentimentContent(text) {
+    // Remove ** markers and convert to styled sections
+    let html = text
+        // Convert **Header:** patterns to styled headers
+        .replace(/\*\*([^*]+):\*\*/g, '<div class="sentiment-section-header">$1</div>')
+        // Convert remaining **text** to bold
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        // Convert - bullet points to styled list items
+        .replace(/^- (.+)$/gm, '<div class="sentiment-bullet">$1</div>')
+        // Convert line breaks to proper spacing
+        .replace(/\n\n/g, '</div><div class="sentiment-paragraph">')
+        .replace(/\n/g, '<br>');
+
+    // Wrap in paragraph div
+    html = '<div class="sentiment-paragraph">' + html + '</div>';
+
+    return html;
+}
+
 function addSentimentAnalysis(sentimentContent) {
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message assistant sentiment-analysis';
-    
+
     const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-    
+
+    // Format the sentiment content for better display
+    const formattedContent = formatSentimentContent(sentimentContent);
+
     messageDiv.innerHTML = `
         <div class="message-content">
             <i class="fas fa-chart-line"></i>
@@ -660,12 +809,12 @@ function addSentimentAnalysis(sentimentContent) {
                 <h4>Sentiment Analysis</h4>
             </div>
             <div class="sentiment-content">
-                <pre>${sentimentContent}</pre>
+                ${formattedContent}
             </div>
             <div class="message-time">${time}</div>
         </div>
     `;
-    
+
     messages.appendChild(messageDiv);
     messages.scrollTop = messages.scrollHeight;
 }

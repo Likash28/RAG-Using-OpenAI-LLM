@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import shutil
 import os
+import threading
+import time
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -61,6 +63,30 @@ def get_pipeline():
             logger.error(f"Failed to initialize RAG Pipeline: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Pipeline initialization failed: {str(e)}")
     return pipe
+
+def schedule_file_deletion(file_paths: List[str], delay_seconds: int = 120):
+    """Schedule automatic deletion of uploaded files after a delay.
+
+    Args:
+        file_paths: List of file paths to delete
+        delay_seconds: Delay in seconds before deletion (default: 120 = 2 minutes)
+    """
+    def delete_files():
+        time.sleep(delay_seconds)
+        for file_path in file_paths:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"🗑️ Auto-deleted file after {delay_seconds}s: {file_path}")
+                else:
+                    logger.info(f"File already deleted or not found: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to auto-delete file {file_path}: {str(e)}")
+
+    # Start deletion in a background thread
+    deletion_thread = threading.Thread(target=delete_files, daemon=True)
+    deletion_thread.start()
+    logger.info(f"⏰ Scheduled deletion of {len(file_paths)} files in {delay_seconds} seconds")
 
 @app.get("/")
 async def root():
@@ -127,13 +153,21 @@ async def ingest(files: List[UploadFile] = File(...)):
         result = pipeline.ingest_paths(saved)
         logger.info(f"Successfully ingested {len(saved)} files")
         
-        # Prepare response with file names, captions, transcripts, and PDF texts
+        # Prepare response with file names, captions, transcripts, PDF texts, and text contents
         logger.info(f"Preparing response with audio_transcripts: {result.get('audio_transcripts', {})}")
         logger.info(f"Preparing response with pdf_texts: {result.get('pdf_texts', {})}")
+        logger.info(f"Preparing response with text_contents: {result.get('text_contents', {})}")
         ingested_files = []
         for path in saved:
             filename = os.path.basename(path)
             file_info = {"filename": filename}
+            
+            # Determine file type from extension
+            ext = os.path.splitext(filename)[1].lower().lstrip(".")
+            is_image_file = ext in {"png", "jpg", "jpeg", "webp", "bmp", "tiff"}
+            is_audio_file = ext in {"mp3", "wav", "m4a", "flac", "ogg"}
+            is_pdf_file = ext == "pdf"
+            is_text_file = ext == "txt"
             
             # Check if this file has a BLIP caption (image)
             if result.get("image_captions") and filename in result["image_captions"]:
@@ -142,6 +176,17 @@ async def ingest(files: List[UploadFile] = File(...)):
                     file_info["blip_caption"] = caption
                     file_info["is_image"] = True
                     logger.info(f"Added BLIP caption for {filename}")
+            
+            # Check if this file has OCR text (image)
+            ocr_texts = result.get("ocr_texts", {})
+            logger.info(f"Checking ocr_texts for {filename}: {filename in ocr_texts}")
+            if filename in ocr_texts:
+                ocr_text = ocr_texts[filename]
+                logger.info(f"Found OCR text for {filename}, length: {len(ocr_text) if ocr_text else 0}")
+                if ocr_text:
+                    file_info["ocr_text"] = ocr_text
+                    file_info["is_image"] = True
+                    logger.info(f"✅ Added OCR text for {filename} (length: {len(ocr_text)} chars)")
             
             # Check if this file has an audio transcript
             audio_transcripts = result.get("audio_transcripts", {})
@@ -164,11 +209,48 @@ async def ingest(files: List[UploadFile] = File(...)):
                     file_info["pdf_text"] = pdf_text
                     file_info["is_pdf"] = True
                     logger.info(f"✅ Added PDF text for {filename} (length: {len(pdf_text)} chars)")
+
+            # Check if this file is a text file with extracted content
+            text_contents = result.get("text_contents", {})
+            logger.info(f"Checking text_contents for {filename}: {filename in text_contents}")
+            if filename in text_contents:
+                text_content = text_contents[filename]
+                logger.info(f"Found text content for {filename}, length: {len(text_content) if text_content else 0}")
+                if text_content:
+                    file_info["text_content"] = text_content
+                    file_info["is_text"] = True
+                    logger.info(f"✅ Added text content for {filename} (length: {len(text_content)} chars)")
             
+            # MANDATORY: Ensure ALL file types have text for sentiment analysis
+            # If no text was extracted, use fallback descriptions to ensure sentiment analysis
+            if is_image_file and not file_info.get("ocr_text") and not file_info.get("blip_caption"):
+                # Image with no OCR or BLIP - use filename as fallback for sentiment analysis
+                file_info["sentiment_fallback"] = f"Image file: {filename}. Visual content uploaded for analysis."
+                file_info["is_image"] = True
+                logger.info(f"⚠️ No OCR/BLIP for {filename}, using fallback text for sentiment analysis")
+            elif is_audio_file and not file_info.get("audio_transcript"):
+                # Audio with no transcript - use filename as fallback
+                file_info["sentiment_fallback"] = f"Audio file: {filename}. Audio content uploaded for analysis."
+                file_info["is_audio"] = True
+                logger.info(f"⚠️ No transcript for {filename}, using fallback text for sentiment analysis")
+            elif is_pdf_file and not file_info.get("pdf_text"):
+                # PDF with no text - use filename as fallback
+                file_info["sentiment_fallback"] = f"PDF document: {filename}. Document uploaded for analysis."
+                file_info["is_pdf"] = True
+                logger.info(f"⚠️ No text extracted from {filename}, using fallback text for sentiment analysis")
+            elif is_text_file and not file_info.get("text_content"):
+                # Text file with no content - use filename as fallback
+                file_info["sentiment_fallback"] = f"Text file: {filename}. Text document uploaded for analysis."
+                file_info["is_text"] = True
+                logger.info(f"⚠️ No text extracted from {filename}, using fallback text for sentiment analysis")
+
             ingested_files.append(file_info)
         
-        logger.info(f"Final ingested_files: {[f.get('filename') + (' (audio)' if f.get('is_audio') else '') + (' (image)' if f.get('is_image') else '') for f in ingested_files]}")
-        
+        logger.info(f"Final ingested_files: {[f.get('filename') + (' (audio)' if f.get('is_audio') else '') + (' (image)' if f.get('is_image') else '') + (' (pdf)' if f.get('is_pdf') else '') + (' (text)' if f.get('is_text') else '') for f in ingested_files]}")
+
+        # Schedule automatic file deletion after 2 minutes (120 seconds)
+        schedule_file_deletion(saved, delay_seconds=120)
+
         return {
             "ingested": [os.path.basename(x) for x in saved],
             "files": ingested_files,
@@ -197,7 +279,10 @@ async def ask(payload: dict):
     
     try:
         res = pipeline.query(q, k, skip_retrieval=skip_retrieval)
-        logger.info(f"Query processed successfully - Response length: {len(res.get('main_response', ''))} chars")
+        main_resp_len = len(res.get('main_response', ''))
+        sentiment_len = len(res.get('sentiment_analysis', ''))
+        logger.info(f"Query processed successfully - Main response: {main_resp_len} chars, Sentiment analysis: {sentiment_len} chars")
+        logger.info(f"Sentiment analysis preview: {res.get('sentiment_analysis', '')[:200]}...")
         return JSONResponse(res)
     except Exception as e:
         logger.error(f"Query processing failed: {str(e)}", exc_info=True)
