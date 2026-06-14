@@ -1,266 +1,89 @@
-# 🧠 Depression RAG Assistant
+# RAG Using OpenAI LLM
 
-A specialized Retrieval-Augmented Generation (RAG) system designed to provide accurate, evidence-based information about depression and mental health. Built with FastAPI, OpenAI LLM, and a beautiful Glass UI interface.
+![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green?logo=fastapi&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4-412991?logo=openai&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 
-## ✨ Features
+A Retrieval-Augmented Generation (RAG) pipeline built with OpenAI and FastAPI. Supports multi-modal document ingestion (PDF, images, text), vector semantic search, and a clean glassmorphism UI for querying your knowledge base.
 
-### 🎯 **Depression-Focused AI Assistant**
-- **Specialized Knowledge**: Exclusively handles depression and mental health queries
-- **Evidence-Based Responses**: Provides accurate, scientifically validated information
-- **Crisis Detection**: Automatically detects and responds to suicidal ideation
-- **Professional Boundaries**: Maintains appropriate clinical boundaries
-
-### 🎨 **Modern Glass UI Interface**
-- **Beautiful Design**: Glass morphism design with gradient backgrounds
-- **Responsive Layout**: Works seamlessly on desktop and mobile devices
-- **Separated Display**: Clean separation between main responses and sentiment analysis
-- **Real-time Status**: Live connection status and file upload progress
-
-### 🔍 **Advanced RAG Capabilities**
-- **Multi-Modal Support**: Handles text, PDF, and image documents
-- **Vector Search**: Semantic search across uploaded documents
-- **Context-Aware**: Uses relevant document context for accurate responses
-- **Source Attribution**: Shows sources for all information provided
-
-### 📊 **Sentiment Analysis**
-- **User Query Analysis**: Analyzes emotional tone of incoming questions
-- **Response Sentiment**: Identifies emotional tone of AI responses
-- **Justification**: Explains reasoning behind chosen response tone
-- **Visual Separation**: Clean display of sentiment analysis
-
-### 🛡️ **Safety & Security**
-- **Crisis Intervention**: Immediate emergency response for crisis situations
-- **Topic Guardrails**: Polite redirection for non-depression topics
-- **Professional Disclaimers**: Appropriate medical disclaimers
-- **Secure Configuration**: No API keys in repository
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Python 3.8+
-- OpenAI API key
-- Git
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/Likash28/RAG-Using-OpenAI-LLM.git
-   cd RAG-Using-OpenAI-LLM
-   ```
-
-2. **Create virtual environment**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Configure environment**
-   ```bash
-   cp env.example .env
-   # Edit .env and add your OpenAI API key
-   ```
-
-5. **Run the application**
-   ```bash
-   uvicorn app:app --reload --port 8000
-   ```
-
-6. **Open in browser**
-   ```
-   http://localhost:8000
-   ```
-
-## 📁 Project Structure
+## Architecture
 
 ```
-├── app.py                 # FastAPI application
-├── pipeline.py            # RAG pipeline with OpenAI LLM
-├── config.py              # Configuration management
-├── openai_llm.py          # OpenAI LLM wrapper
-├── vectorstore.py         # Vector database management
-├── embedder.py            # Text and image embeddings
-├── extractors.py          # Document extraction and processing
-├── logging_config.py      # Centralized logging
-├── prompts/               # Prompt system
-│   ├── system_prompt.txt  # Depression-focused system prompt
-│   └── loader.py          # Topic detection and crisis handling
-├── static/                # Frontend files
-│   ├── index.html         # Main interface
-│   ├── style.css          # Glass UI styling
-│   └── script.js          # Frontend logic
-├── requirements.txt       # Python dependencies
-├── env.example           # Environment template
-└── .gitignore            # Git ignore rules
+User Query
+    │
+    ▼
+Embedder (OpenAI text-embedding)
+    │
+    ▼
+VectorStore (semantic search)
+    │
+    ▼
+Context Retrieval
+    │
+    ▼
+OpenAI GPT (generation with context)
+    │
+    ▼
+Response + Source Citations
 ```
 
-## 🔧 Configuration
+## Features
 
-### Environment Variables
+- Multi-modal document support — PDF, images, plain text
+- Semantic vector search via embeddings
+- Streaming responses from GPT-4
+- Sentiment analysis on queries and responses
+- Crisis detection with safety guardrails
+- Topic-based query filtering
+- Clean glassmorphism frontend
 
-Create a `.env` file with the following variables:
+## Tech Stack
 
+| Layer | Tech |
+|-------|------|
+| Backend | FastAPI, Python |
+| LLM | OpenAI GPT-4 |
+| Embeddings | OpenAI text-embedding-ada-002 |
+| Vector Store | FAISS / Chroma |
+| Frontend | HTML, CSS (glassmorphism) |
+
+## Getting Started
+
+```bash
+git clone https://github.com/Likash28/RAG-Using-OpenAI-LLM.git
+cd RAG-Using-OpenAI-LLM
+pip install -r requirements.txt
+```
+
+Set up your `.env`:
 ```env
-# Provider
-PROVIDER=openai
-
-# OpenAI Configuration
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=gpt-4o-mini
-
-# Embeddings
-TEXT_EMBEDDER=sentence-transformers/all-MiniLM-L6-v2
-BLIP_EMBEDDER=Salesforce/blip-itm-base-coco
-
-# Database
-CHROMA_DIR=./chroma_db
-SQLITE_PATH=./facts.db
-
-# RAG Settings
-TOP_K=5
-MAX_TOKENS=600
-
-# Audio Transcription
-OPENAI_WHISPER=local
-WHISPER_MODEL_SIZE=base
-
-# Logging
-ENVIRONMENT=development
-DEV_LOG_LEVEL=DEBUG
-PROD_LOG_LEVEL=INFO
-LOG_DIR=logs
+OPENAI_API_KEY=your_key_here
 ```
 
-## 🎯 Usage
-
-### 1. **Upload Documents**
-- Drag and drop files or click to browse
-- Supports PDF, images, and text files
-- Documents are automatically processed and indexed
-
-### 2. **Ask Questions**
-- Type depression-related questions in the chat interface
-- Get evidence-based responses with source attribution
-- View sentiment analysis for each interaction
-
-### 3. **Crisis Support**
-- Automatic detection of crisis situations
-- Immediate emergency resources and helpline numbers
-- Professional crisis intervention protocols
-
-## 🔍 API Endpoints
-
-### Health Check
-```http
-GET /health
-```
-
-### Upload Documents
-```http
-POST /ingest
-Content-Type: multipart/form-data
-```
-
-### Ask Questions
-```http
-POST /ask
-Content-Type: application/json
-{
-  "query": "What are the symptoms of depression?",
-  "k": 5
-}
-```
-
-### Reset Conversation
-```http
-POST /reset
-```
-
-## 🛡️ Safety Features
-
-### Crisis Detection
-- Automatically identifies suicidal ideation
-- Provides immediate emergency resources
-- Bypasses normal processing for safety
-
-### Topic Guardrails
-- Only responds to depression-related queries
-- Polite redirection for off-topic questions
-- Maintains professional boundaries
-
-### Professional Disclaimers
-- Clear AI assistant disclaimers
-- Medical advice disclaimers
-- Crisis resource information
-
-## 📊 Sentiment Analysis
-
-The system provides detailed sentiment analysis for every interaction:
-
-- **User Query Sentiment**: Analyzes emotional tone of questions
-- **Response Sentiment**: Identifies emotional tone of responses
-- **Justification**: Explains reasoning behind chosen tone
-
-## 🔧 Development
-
-### Running in Development Mode
+Run the app:
 ```bash
-uvicorn app:app --reload --port 8000
+uvicorn app:app --reload
 ```
 
-### Logging
-- Comprehensive logging system
-- Request/response tracking
-- Error monitoring
-- Log files in `logs/` directory
+Open `http://localhost:8000` in your browser.
 
-### Testing
-```bash
-# Test health endpoint
-curl http://localhost:8000/health
+## Project Structure
 
-# Test query endpoint
-curl -X POST "http://localhost:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What are the symptoms of depression?", "k": 3}'
+```
+├── app.py           # FastAPI entrypoint
+├── pipeline.py      # RAG pipeline logic
+├── embedder.py      # Embedding generation
+├── vectorstore.py   # Vector DB operations
+├── config.py        # Config and env vars
+└── requirements.txt
 ```
 
-## 🤝 Contributing
+## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Pull requests are welcome. For major changes, open an issue first.
 
-## 📞 Support
+## License
 
-For support and questions:
-- Create an issue in the GitHub repository
-- Check the documentation in the `prompts/` directory
-- Review the logging files for debugging
-
-## ⚠️ Important Notes
-
-- **Not a Replacement for Professional Help**: This system provides information only, not medical advice
-- **Crisis Situations**: Always seek immediate professional help for crisis situations
-- **API Keys**: Never commit API keys to the repository
-- **Professional Use**: Designed for informational purposes, not clinical use
-
-## 🎯 Roadmap
-
-- [ ] Multi-language support
-- [ ] Advanced analytics dashboard
-- [ ] Integration with more LLM providers
-- [ ] Mobile app development
-- [ ] Enhanced crisis detection algorithms
-
----
-
-**Built with ❤️ for mental health awareness and support, Do drop a STAR if you liked it.**# Updated Sat Oct  4 11:02:53 IST 2025
-# Updated with new email Sat Oct  4 11:09:20 IST 2025
+[MIT](LICENSE)
